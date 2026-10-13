@@ -9,11 +9,13 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,6 +24,7 @@ import (
 	"voipd/internal/auth"
 	"voipd/internal/callflow"
 	"voipd/internal/config"
+	"voipd/internal/directory"
 	"voipd/internal/engine"
 	"voipd/internal/engine/asterisk"
 	"voipd/internal/events"
@@ -71,6 +74,17 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Privileged ports first, then give up root (the container starts
+	// voipd as root with only the capabilities needed for this).
+	var ldapLn net.Listener
+	var ldapErr error
+	if cfg.LDAP.Listen != "" && !*migrateOnly {
+		ldapLn, ldapErr = net.Listen("tcp", cfg.LDAP.Listen)
+	}
+	if err := dropPrivileges(cfg.RunAs, log); err != nil {
+		return err
+	}
 
 	st, err := store.Open(ctx, cfg.Store.Path)
 	if err != nil {
@@ -140,6 +154,16 @@ func run() error {
 		Stats: statistics, Voicemail: vm, PublicURL: cfg.HTTP.PublicURL, Log: log.With("component", "modules"),
 	}, mqtt.New(), webhook.New(), notify.New())
 
+	phonebook := directory.New(st, nums, log.With("component", "directory"))
+	dirAccounts := directory.NewAccounts(st)
+	ldapSrv := directory.NewLDAP(phonebook, dirAccounts, nums, log.With("component", "ldap"))
+	carddavSrv := directory.NewCardDAV(phonebook, dirAccounts, log.With("component", "carddav"))
+	if ldapErr != nil {
+		log.Warn("LDAP phone book not available: cannot listen (port 389 needs the container settings from "+
+			"deploy/docker-compose.yml, or set VOIPD_LDAP_LISTEN to a port above 1023)", "addr", cfg.LDAP.Listen, "err", ldapErr)
+		ldapSrv.SetError(cfg.LDAP.Listen, ldapErr)
+	}
+
 	var proxies []netip.Prefix
 	for _, p := range cfg.HTTP.TrustedProxies {
 		proxies = append(proxies, netip.MustParsePrefix(p)) // validated by config.Load
@@ -148,7 +172,8 @@ func run() error {
 		Addr: cfg.HTTP.Listen,
 		Handler: web.New(web.Deps{
 			Store: st, Numbers: nums, Config: conf, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
-			Stats: statistics, Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm, Log: log.With("component", "web"), UI: webui.FS(),
+			Stats: statistics, Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
+			Directory: phonebook, DirectoryAccounts: dirAccounts, LDAP: ldapSrv, CardDAV: carddavSrv, Log: log.With("component", "web"), UI: webui.FS(),
 			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -169,6 +194,17 @@ func run() error {
 		httpDone <- nil
 	}()
 	wg.Add(7)
+	if ldapLn != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Info("LDAP phone book listening", "addr", ldapLn.Addr())
+			if err := ldapSrv.Serve(ctx, ldapLn); err != nil {
+				log.Error("LDAP server stopped", "err", err)
+				ldapSrv.SetError(cfg.LDAP.Listen, err)
+			}
+		}()
+	}
 	go func() { defer wg.Done(); mods.Run(ctx) }()
 	go func() { defer wg.Done(); screen.Run(ctx) }()
 	go func() { defer wg.Done(); syncer.Run(ctx) }()
@@ -328,4 +364,28 @@ func watchDNS(ctx context.Context, cfg config.Config, conf *pbx.Configurator, su
 	w.Run(ctx, conf.Hosts, func(host string, regs []string) {
 		sup.Kick(ctx, time.Now(), "dns_changed", regs...)
 	})
+}
+
+// dropPrivileges switches to uid:gid when running as root.
+func dropPrivileges(runAs string, log *slog.Logger) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	u, g, ok := strings.Cut(runAs, ":")
+	uid, err1 := strconv.Atoi(u)
+	gid, err2 := strconv.Atoi(g)
+	if !ok || err1 != nil || err2 != nil || uid == 0 {
+		return fmt.Errorf("run_as %q: want uid:gid of an unprivileged user", runAs)
+	}
+	if err := syscall.Setgroups(nil); err != nil {
+		return fmt.Errorf("drop privileges: %w", err)
+	}
+	if err := syscall.Setgid(gid); err != nil {
+		return fmt.Errorf("drop privileges: %w", err)
+	}
+	if err := syscall.Setuid(uid); err != nil {
+		return fmt.Errorf("drop privileges: %w", err)
+	}
+	log.Info("running unprivileged", "uid", uid, "gid", gid)
+	return nil
 }

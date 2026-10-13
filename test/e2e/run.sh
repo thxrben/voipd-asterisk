@@ -73,6 +73,8 @@ check "ring time ~ timeout" 4 \
 	"$(sql "SELECT CAST(round((ended_at - started_at) / 1000.0) AS INT) FROM calls WHERE id='$(last_call id)'")"
 
 log "scenario: caller hangs up while ringing"
+# A long ring time, so a busy machine cannot turn this into a missed call.
+sql "UPDATE ring_groups SET ring_timeout = 30 WHERE id = 1"
 peer "channel originate Local/call@carrier-out application Wait 15" >/dev/null
 ringing() { [ "$(sql "SELECT count(*) FROM call_legs l JOIN calls c ON c.id=l.call_id WHERE c.ended_at IS NULL AND l.kind='extension'")" -ge 2 ]; }
 wait_for "phones ringing" 15 ringing
@@ -80,6 +82,7 @@ peer "channel request hangup all" >/dev/null
 n=$((n + 1))
 wait_for "cancelled call finished" 30 calls_done $n
 check "status" cancelled "$(last_call status)"
+sql "UPDATE ring_groups SET ring_timeout = 4 WHERE id = 1"
 
 log "scenario: phone 10 calls out (national number -> E.164 on trunk)"
 peer "database put test outbound_talk 3" >/dev/null

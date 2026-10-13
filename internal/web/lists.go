@@ -125,6 +125,9 @@ func (s *Server) listResult(w http.ResponseWriter, r *http.Request, err error, s
 	if err := s.d.Screening.Reload(r.Context()); err != nil {
 		s.d.Log.Error("rebuild screening index", "err", err)
 	}
+	if s.d.Directory != nil {
+		s.d.Directory.Invalidate() // contacts may have changed
+	}
 	writeJSON(w, status, map[string]any{"result": body})
 }
 

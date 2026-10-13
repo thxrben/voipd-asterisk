@@ -8,8 +8,10 @@ require (
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/emersion/go-vcard v0.1.0
 	github.com/emersion/go-webdav v0.7.0
+	github.com/go-asn1-ber/asn1-ber v1.5.8
 	github.com/go-chi/chi/v5 v5.4.0
 	github.com/go-jose/go-jose/v4 v4.1.5
+	github.com/go-ldap/ldap/v3 v3.4.15
 	github.com/miekg/dns v1.1.73
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/nyaruka/phonenumbers v1.8.1
@@ -21,6 +23,7 @@ require (
 )
 
 require (
+	github.com/Azure/go-ntlmssp v0.1.1 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect

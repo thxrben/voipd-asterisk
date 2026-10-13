@@ -19,6 +19,7 @@ import (
 	"voipd/internal/auth/oidctest"
 	"voipd/internal/callflow"
 	"voipd/internal/config"
+	"voipd/internal/directory"
 	"voipd/internal/engine"
 	"voipd/internal/events"
 	"voipd/internal/modules"
@@ -142,13 +143,17 @@ func newEnv(t *testing.T, mutate func(*config.Auth)) *env {
 	modsDone := make(chan struct{})
 	go func() { defer close(syncDone); syncer.Run(syncCtx) }()
 	t.Cleanup(func() { stopSync(); <-syncDone; <-modsDone })
+	phonebook := directory.New(st, z, log)
+	dirAcc := directory.NewAccounts(st)
 	vmDir := t.TempDir()
 	vm := voicemail.New(st, nil, bus, vmDir, log)
 	mods := modules.NewManager(&modules.Host{Bus: bus, Store: st, Screening: screen, Numbers: z, Trunks: fakeTrunks{},
 		Stats: stats.New(st.DB), Log: log}, mqtt.New(), webhook.New(), notify.New())
 	go func() { defer close(modsDone); mods.Run(syncCtx) }()
 	h = New(Deps{Store: st, Numbers: z, Config: applied, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
-		Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm, Log: log, DataDir: t.TempDir(), StatusEvery: 50 * time.Millisecond,
+		Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
+		Directory: phonebook, DirectoryAccounts: dirAcc, CardDAV: directory.NewCardDAV(phonebook, dirAcc, log),
+		LDAP: directory.NewLDAP(phonebook, dirAcc, z, log), Log: log, DataDir: t.TempDir(), StatusEvery: 50 * time.Millisecond,
 		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
 	return &env{t: t, srv: srv, idp: idp, st: st, bus: bus, calls: calls, applied: applied, screen: screen, vmDir: vmDir}
 }

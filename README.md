@@ -26,7 +26,8 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | Call blocking: block/allow lists, number ranges, PhoneBlock/CardDAV sync, bulk import, contacts, pause, anonymous blocking | done |
 | Integrations: MQTT with Home Assistant discovery, signed webhooks, e-mail notifications | done |
 | Voicemail: German prompts, message waiting light, *98 phone menu, web player, personal greetings | done |
-| Directory, backups | in progress |
+| Phone directory: LDAP (Yealink, Snom, Grandstream, Gigaset) and CardDAV (softphones, FritzBox) | done |
+| Backups, hardening | in progress |
 
 ## Run
 
@@ -38,7 +39,9 @@ docker compose up -d --build
 
 Both containers use host networking (SIP/RTP need real addresses; ARI/AMI
 stay on 127.0.0.1). Ports: SIP 5060/udp+tcp, 5061/tcp (TLS), RTP
-10000–10999/udp.
+10000–10999/udp, web UI and CardDAV 8080/tcp, LDAP 389/tcp. voipd starts as
+root with only the capabilities to open port 389 and to switch users, then
+runs as an unprivileged user without any capabilities.
 
 Building for the Pi from another machine needs `docker buildx` (`--platform
 linux/arm64`); without it, build on the Pi itself.
@@ -59,6 +62,8 @@ database.
 | `VOIPD_DNS_SERVER` | `host:port` resolver for voipd's registrar DNS checks |
 | `VOIPD_DB_PATH`, `VOIPD_LOG_LEVEL` | database path, `debug`/`info`/`warn` |
 | `VOIPD_VOICEMAIL_DIR` | voicemail directory, shared with Asterisk's recording directory (default `/var/lib/voipd/voicemail`) |
+| `VOIPD_LDAP_LISTEN` | LDAP phone book (default `[::]:389`, empty disables it) |
+| `VOIPD_RUN_AS` | `uid:gid` voipd switches to when started as root (default `65532:65532`) |
 | `VOIPD_HTTP_LISTEN`, `VOIPD_PUBLIC_URL` | web UI listen address (default `[::]:8080`) and the URL users open |
 | `VOIPD_OIDC_ISSUER`, `…_CLIENT_ID`, `…_CLIENT_SECRET` | authentik/OIDC login; redirect URI is `<public url>/auth/callback` |
 | `VOIPD_ADMIN_GROUP`, `VOIPD_USER_GROUP` | groups granting admin / user access (default `voipd-admins` / `voipd-users`) |
@@ -133,6 +138,26 @@ The German prompts are generated once with [Piper](https://github.com/rhasspy/pi
 (voice "Thorsten") when the Asterisk image is built; texts are in
 `deploy/asterisk/prompts/de.txt`. Messages and greetings live in the
 `voicemail` volume shared by both containers.
+
+## Phone directory
+
+Phones look up names in voipd's contacts (all contact lists, synced ones
+included) and the extensions, and show caller names on incoming calls.
+Create an account under *Directory*; the page shows the values to enter on
+each kind of phone.
+
+- **LDAP** (Yealink, Snom, Grandstream, Gigaset): server = voipd's address,
+  port 389, base `dc=voipd`, simple bind with the account (`phones` or
+  `uid=phones,dc=voipd`). Entries are `inetOrgPerson` with `cn`, `sn`,
+  `givenName`, `o`, `telephoneNumber`, `mobile`, `homePhone`; numbers are
+  given as dialed (`01701234567`, `0044…`). Number searches match however
+  the phone writes the number (`0170…`, `+49170…`, `0049170…`).
+- **CardDAV** (softphones, DAVx5, iOS, FritzBox online phone book):
+  `https://<voipd>/dav/` with the account; the address books are
+  `/dav/<account>/books/contacts/` and `…/extensions/`.
+
+The directory is read-only. LDAP is unencrypted: keep it to the LAN and
+WireGuard.
 
 ## Integrations
 
@@ -225,6 +250,8 @@ test/e2e/ui.sh          # web UI in Chrome (Playwright) with demo data and a fak
 test/e2e/integrations.sh # Mosquitto, mailpit, webhook receiver: events, e-mail and MQTT commands
                         # with real calls (~1.5 min)
 test/e2e/voicemail.sh   # leave a message, message waiting light, *98 listen and delete (~1 min)
+test/e2e/directory.sh   # voipd image with the compose security settings: LDAP on 389 as the phones
+                        # search, unprivileged afterwards, CardDAV (~3 min with image build)
 ```
 
 UI development: `go run ./test/devseed -db /tmp/demo.db` creates demo data;

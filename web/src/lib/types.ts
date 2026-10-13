@@ -463,3 +463,29 @@ export interface PhoneCode {
   name: string
   description: string
 }
+
+// --- phone directory ---
+
+export interface DirectoryAccount {
+  id: number
+  username: string
+  created_at: string
+  last_used_at: string | null
+}
+
+export interface DirectoryInfo {
+  ldap: { listening: boolean; port: number; error: string }
+  base_dn: string
+  carddav_path: string
+  accounts: DirectoryAccount[]
+  contacts: number
+  extensions: number
+}
+
+export interface DirectoryEntry {
+  id: string
+  kind: 'contact' | 'extension'
+  name: string
+  org: string
+  numbers: { e164: string; dial: string; type: string }[]
+}

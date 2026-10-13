@@ -18,6 +18,7 @@ import (
 
 	"voipd/internal/auth"
 	"voipd/internal/callflow"
+	"voipd/internal/directory"
 	"voipd/internal/engine"
 	"voipd/internal/events"
 	"voipd/internal/modules"
@@ -52,30 +53,42 @@ type ConfigApplier interface {
 }
 
 type Deps struct {
-	Store          *store.Store
-	Numbers        *numbers.Normalizer
-	Config         ConfigApplier // nil: changes are stored only (tests)
-	Auth           *auth.Service
-	Engine         EngineStatus
-	Calls          Calls
-	Trunks         Trunks
-	Bus            *events.Bus
-	Stats          *stats.Stats
-	Screening      *screening.Engine
-	Syncer         *screening.Syncer
-	Modules        *modules.Manager
-	Voicemail      *voicemail.Service
-	Log            *slog.Logger
-	UI             fs.FS // built web UI (index.html + assets); nil = none
-	DataDir        string
-	TrustedProxies []netip.Prefix
-	Now            func() time.Time
+	Store     *store.Store
+	Numbers   *numbers.Normalizer
+	Config    ConfigApplier // nil: changes are stored only (tests)
+	Auth      *auth.Service
+	Engine    EngineStatus
+	Calls     Calls
+	Trunks    Trunks
+	Bus       *events.Bus
+	Stats     *stats.Stats
+	Screening *screening.Engine
+	Syncer    *screening.Syncer
+	Modules   *modules.Manager
+	Voicemail *voicemail.Service
+	// Phone directory (LDAP status, CardDAV, accounts); optional.
+	Directory         *directory.Directory
+	DirectoryAccounts *directory.Accounts
+	LDAP              *directory.LDAP
+	CardDAV           *directory.CardDAV
+	Log               *slog.Logger
+	UI                fs.FS // built web UI (index.html + assets); nil = none
+	DataDir           string
+	TrustedProxies    []netip.Prefix
+	Now               func() time.Time
 	// StatusEvery is the interval of status snapshots on the event stream.
 	StatusEvery time.Duration
 }
 
 type Server struct {
 	d Deps
+}
+
+func init() {
+	// WebDAV methods used by CardDAV clients, unknown to chi otherwise.
+	for _, m := range []string{"PROPFIND", "PROPPATCH", "REPORT", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"} {
+		chi.RegisterMethod(m)
+	}
 }
 
 func New(d Deps) http.Handler {
@@ -90,6 +103,14 @@ func New(d Deps) http.Handler {
 	r.Use(s.recoverer, securityHeaders)
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+
+	// CardDAV phone book: its own Basic auth (directory accounts), no session.
+	if d.CardDAV != nil {
+		d.CardDAV.ClientIP = s.clientIP
+		r.Handle(directory.DAVPrefix, d.CardDAV)
+		r.Handle(directory.DAVPrefix+"/*", d.CardDAV)
+		r.Handle("/.well-known/carddav", d.CardDAV)
+	}
 
 	r.Route("/auth", func(r chi.Router) {
 		r.Get("/config", s.authConfig)
@@ -155,6 +176,12 @@ func New(d Deps) http.Handler {
 			r.Post("/contacts", s.createContact)
 			r.Put("/contacts/{id}", s.updateContact)
 			r.Delete("/contacts/{id}", s.deleteContact)
+
+			r.Get("/directory", s.directoryInfo)
+			r.Get("/directory/search", s.directorySearch)
+			r.Post("/directory/accounts", s.createDirectoryAccount)
+			r.Delete("/directory/accounts/{id}", s.deleteDirectoryAccount)
+			r.Post("/directory/accounts/{id}/password", s.regenerateDirectoryPassword)
 
 			r.Get("/modules", s.listModules)
 			r.Put("/modules/{name}", s.saveModule)

@@ -24,7 +24,16 @@ type Config struct {
 	Network  Network  `yaml:"network"`
 	Trunks   Trunks   `yaml:"trunks"`
 	Auth     Auth     `yaml:"auth"`
+	LDAP     LDAP     `yaml:"ldap"`
 	LogLevel string   `yaml:"log_level"`
+	// RunAs is "uid:gid" voipd switches to when started as root (after
+	// opening privileged ports such as LDAP's 389).
+	RunAs string `yaml:"run_as"`
+}
+
+// LDAP is the phone book server for desk phones.
+type LDAP struct {
+	Listen string `yaml:"listen"` // "" disables it
 }
 
 type Network struct {
@@ -139,6 +148,8 @@ func Default() Config {
 			SessionMax:  7 * 24 * time.Hour,
 		},
 		HTTP:    HTTP{Listen: "[::]:8080"},
+		LDAP:    LDAP{Listen: "[::]:389"},
+		RunAs:   "65532:65532",
 		Numbers: Numbers{Country: "DE"},
 		Trunks: Trunks{
 			Grace:              20 * time.Second,
@@ -187,6 +198,8 @@ func applyEnv(c *Config) {
 		"VOIPD_DB_PATH":       &c.Store.Path,
 		"VOIPD_VOICEMAIL_DIR": &c.Store.VoicemailDir,
 		"VOIPD_HTTP_LISTEN":   &c.HTTP.Listen,
+		"VOIPD_LDAP_LISTEN":   &c.LDAP.Listen,
+		"VOIPD_RUN_AS":        &c.RunAs,
 		"VOIPD_COUNTRY":       &c.Numbers.Country,
 		"VOIPD_AREA_CODE":     &c.Numbers.AreaCode,
 		"VOIPD_LOG_LEVEL":     &c.LogLevel,

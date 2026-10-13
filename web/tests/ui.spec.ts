@@ -580,6 +580,36 @@ test('phone codes page', async ({ page }) => {
   await expect(row).toContainText('7 delete')
 })
 
+test('directory: account with one-time password, search preview, setup values', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept())
+  await loginAs(page, admin)
+  await page.getByRole('link', { name: 'Directory' }).click()
+  await expect(page.getByText('listening on port 18389')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Add account' }).click()
+  await page.getByRole('dialog').getByLabel('User name').fill('Bad Name')
+  await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click()
+  await expect(page.getByRole('dialog').getByText('lowercase letters')).toBeVisible()
+  await page.getByRole('dialog').getByLabel('User name').fill('yealink')
+  await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click()
+  await expect(page.getByTestId('directory-password')).toHaveText(/^\S{16,}$/)
+  await page.getByRole('button', { name: 'Done' }).click()
+  await expect(page.locator('.accounts li', { hasText: 'yealink' })).toContainText('never used')
+
+  await page.getByLabel('Search the directory').fill('0170 1234567')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await expect(page.locator('tr', { hasText: 'Mom' })).toContainText('01701234567')
+
+  const yealink = page.getByRole('region', { name: 'Setup Yealink' })
+  await expect(yealink).toContainText('18389')
+  await expect(yealink).toContainText('dc=voipd')
+  await expect(yealink).toContainText('yealink')
+  await expect(page.getByRole('region', { name: 'Setup FritzBox' })).toContainText('/dav/yealink/books/contacts/')
+
+  await page.getByRole('button', { name: 'Delete yealink' }).click()
+  await expect(page.getByText('No accounts yet')).toBeVisible()
+})
+
 test('users cannot open integrations', async ({ page }) => {
   await loginAs(page, alice)
   await expect(page.getByRole('link', { name: 'Integrations' })).toHaveCount(0)

@@ -35,6 +35,10 @@ type ChannelStateChanged struct {
 }
 
 // ChannelLeft: the channel left voipd control (usually because it hung up).
+//
+// A channel that leaves voipd's application is gone for voipd (the
+// dialplan only runs the application). Asterisk does not always send
+// ChannelDestroyed afterwards, e.g. for an unanswered caller that hangs up.
 type ChannelLeft struct {
 	Meta
 	ChannelID string
@@ -45,6 +49,7 @@ type ChannelLeft struct {
 type ChannelHangupRequested struct {
 	Meta
 	ChannelID string
+	Cause     int // Q.850 cause code, 0 if unknown
 }
 
 type ChannelHangup struct {

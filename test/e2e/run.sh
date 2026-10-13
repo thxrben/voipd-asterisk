@@ -143,4 +143,46 @@ check "only phone 11 rang" "1|1" \
 	"$(sql "SELECT count(*), sum(endpoint LIKE '%office%') FROM call_legs WHERE call_id='$(last_call id)' AND kind='extension'")"
 api PUT /extensions/1/dnd '{"dnd":false}' >/dev/null
 
+log "scenario: PhoneBlock-like CardDAV blocklist (9000 contacts) blocks the caller"
+DAV_PORT=${DAV_PORT:-18095}
+(cd "$ROOT" && go build -o "$WORK/carddavfake" ./test/carddavfake)
+"$WORK/carddavfake" -listen "127.0.0.1:$DAV_PORT" -n 9000 -tel 01701234567 >"$WORK/carddav.log" 2>&1 &
+BG_PIDS+=($!)
+dav_up() { curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$DAV_PORT/" | grep -q 401; }
+wait_for "fake CardDAV server" 20 dav_up
+source_synced() { [ "$(sql "SELECT last_status FROM list_sources WHERE name='PhoneBlock'")" = ok ]; }
+t0=$(now_ms)
+created=$(api POST /lists/sources '{"name":"PhoneBlock","kind":"carddav","target":"block","url":"http://127.0.0.1:'"$DAV_PORT"'/phoneblock/contacts/","username":"phoneblock","password":"token","interval_min":360,"enabled":true}')
+PB=$(sed -n 's/.*"id":\([0-9]*\).*/\1/p' <<<"$created")
+wait_for "PhoneBlock synced" 60 source_synced
+echo "    synced in $(( $(now_ms) - t0 )) ms"
+check "all numbers synced" 10801 "$(sql "SELECT count(*) FROM list_entries WHERE source_id=$PB")"
+check "caller is on the blocklist" true \
+	"$(curl -s -b "$JAR" "$API/api/v1/screening/check?number=01701234567" | sed -n 's/.*"block":\([a-z]*\).*/\1/p')"
+peer "database put test phone10 ring" >/dev/null
+peer "database put test phone11 ring" >/dev/null
+peer "channel originate Local/call@carrier-out application Wait 6" >/dev/null
+n=$((n + 1))
+sleep 6 # a blocked caller hears ringing until they give up
+peer "channel request hangup all" >/dev/null
+wait_for "blocked call finished" 20 calls_done $n
+check "status" blocked "$(last_call status)"
+check "block reason" "blocklist:PhoneBlock" "$(last_call block_reason)"
+check "caller name from the list" "SPAM: e2e caller" "$(last_call caller_name)"
+check "no phone rang" 0 "$(sql "SELECT count(*) FROM call_legs WHERE call_id='$(last_call id)' AND kind='extension'")"
+check "call linked to the list entry" 1 \
+	"$(sql "SELECT count(*) FROM calls c JOIN list_entries e ON e.id = c.block_entry_id WHERE c.id='$(last_call id)' AND e.pattern='+491701234567'")"
+check "carrier heard ringing, not a rejection" 1 "$(sql "SELECT count(*) FROM calls WHERE id='$(last_call id)' AND ended_at - started_at >= 4000")"
+
+log "scenario: the allowlist overrides the blocklist"
+api POST /lists/entries '{"target":"allow","number":"0170 1234567","label":"actually a friend"}' >/dev/null
+peer "channel originate Local/call@carrier-out application Wait 15" >/dev/null
+n=$((n + 1))
+wait_for "call finished" 30 calls_done $n
+check "status" missed "$(last_call status)"
+check "phones rang" 2 "$(sql "SELECT count(*) FROM call_legs WHERE call_id='$(last_call id)' AND kind='extension'")"
+sleep 6 # hit counters are written in batches
+check "hits counted on both entries" "1|1" \
+	"$(sql "SELECT (SELECT hits FROM list_entries WHERE source_id=$PB AND pattern='+491701234567'), (SELECT hits FROM list_entries WHERE source_id=2 AND pattern='+491701234567')")"
+
 summary

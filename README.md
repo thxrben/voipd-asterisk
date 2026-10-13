@@ -23,7 +23,8 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | Web API: OIDC login (authentik), sessions, roles, call log, statistics, live events | done |
 | Web UI: Pi-hole-style dashboard, call log with details, status page (light/dark, mobile) | done |
 | Telephony configuration in the UI: lines (Telekom preset), numbers, extensions with phone credentials, ring groups, do not disturb | done |
-| Blocklists, modules (MQTT, webhooks), voicemail, directory, backups | in progress |
+| Call blocking: block/allow lists, number ranges, PhoneBlock/CardDAV sync, bulk import, contacts, pause, anonymous blocking | done |
+| Modules (MQTT, webhooks, email), voicemail, directory, backups | in progress |
 
 ## Run
 
@@ -74,6 +75,34 @@ Supervisor timings (`trunks:` in YAML) default to production values:
 `grace: 20s`, `first_retry: 45s`, `max_backoff: 10m`,
 `reregister_attempts: 3`, `restart_after: 15m`, `restart_cooldown: 30m`.
 
+## Call blocking
+
+Inbound callers are checked in this order:
+
+1. **Allowlists** and **contacts** (with "Never block contacts", the default): the call rings.
+2. **Pause**: while blocking is paused, everything rings.
+3. **Anonymous callers**, if "Block anonymous callers" is on.
+4. **Blocklists**: the call is blocked *silently* – the caller keeps hearing
+   ringing, no phone rings, and the call shows up as blocked in the log.
+
+Numbers are stored in E.164 form, whatever format they were entered or
+imported in. A trailing `*` blocks a range (`0201 123*`); ranges need the
+area code and at least six digits after the country code. Lookups use an
+in-memory index that is rebuilt and swapped after every change (~40 ns per
+lookup with 100,000 numbers), so screening never waits for the database.
+
+**PhoneBlock**: *Blocking → Add list → PhoneBlock*, then enter your
+PhoneBlock username and a CardDAV token (created in your PhoneBlock
+settings). The address book (~9,000 numbers, several per contact) is synced
+every 6 hours; only new or changed vCards are downloaded. A failed sync –
+wrong token, server down, or an address book that suddenly comes back empty –
+keeps the previous list and is shown on the list's card.
+
+Other sources: any CardDAV address book (also for contacts, e.g. Nextcloud),
+a URL with a CSV/text/vCard list downloaded periodically, or a one-off
+import of a file (checked first, then imported as its own list so it can be
+removed again as a whole).
+
 ## Trunk reliability
 
 Asterisk's registration retries are configured never to give up (also after
@@ -101,7 +130,8 @@ including failover to the next SRV target when the preferred one dies.
 
 ```sh
 go test -race ./...     # unit tests (call flows run against a fake engine)
-test/e2e/run.sh         # real Asterisk: calls between carrier, PBX and phones (~1 min)
+test/e2e/run.sh         # real Asterisk: calls between carrier, PBX and phones, config via the API,
+                        # PhoneBlock-like CardDAV blocklist (9,000 contacts) blocking a real call (~2 min)
 test/e2e/dns.sh         # Telekom-like NAPTR/SRV with two servers and two numbers: resolution,
                         # per-number routing, failover, no re-registration during calls (~6 min)
 test/e2e/chaos.sh       # trunk outages, auth rejection, DNS failure, carrier IP move,

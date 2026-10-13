@@ -40,7 +40,7 @@ var (
 	}
 	spammers = []string{"+4930120045001", "+4930120045002", "+4969123987000", "+4989555000111",
 		"+4940333221100", "+4921165432100", "+493012345000", "anonymous"}
-	exts = []string{"10", "11", "12"}
+	exts  = []string{"10", "11", "12"}
 	users = map[string]string{"10": "kitchen", "11": "office", "12": "bedroom"}
 )
 
@@ -69,6 +69,10 @@ func run(path string, days int, seed uint64, owner string) error {
 		if _, err := st.DB.ExecContext(ctx, q); err != nil {
 			return err
 		}
+	}
+
+	if err := seedLists(ctx, st, r); err != nil {
+		return err
 	}
 
 	now := time.Now()
@@ -211,5 +215,57 @@ func addCall(ctx context.Context, st *store.Store, r *rand.Rand, id string, at t
 	}
 	st.AddCallEvent(ctx, id, at, "call.incoming", map[string]any{"line": c.Callee})
 	st.AddCallEvent(ctx, id, c.EndedAt, "call.ended", map[string]any{"status": string(c.Status)})
+	return nil
+}
+
+// seedLists adds a synced PhoneBlock list (the spammers plus filler
+// numbers), a few manual entries and the friends as contacts.
+func seedLists(ctx context.Context, st *store.Store, r *rand.Rand) error {
+	if _, err := st.DB.ExecContext(ctx, `
+		INSERT OR IGNORE INTO list_sources(id, name, kind, target, url, username, password, interval_min, last_sync_at, last_status)
+		VALUES (10, 'PhoneBlock', 'carddav', 'block', 'https://phoneblock.net/phoneblock/contacts/', 'demo', 'demo', 360, ?, 'ok')`,
+		time.Now().Add(-47*time.Minute).UnixMilli()); err != nil {
+		return err
+	}
+	var cards []store.Card
+	for i, s := range spammers {
+		if s == "anonymous" {
+			continue
+		}
+		cards = append(cards, store.Card{Href: fmt.Sprintf("/pb/s%d.vcf", i), ETag: "1", Name: "SPAM: Telefonwerbung",
+			Numbers: []store.CardNumber{{Pattern: s}}})
+	}
+	for i := range 400 {
+		nums := []store.CardNumber{{Pattern: fmt.Sprintf("+49%d", 1520000000+r.IntN(90000000))}}
+		if i%7 == 0 {
+			nums = append(nums, store.CardNumber{Pattern: fmt.Sprintf("+49%d", 30200000000+r.IntN(900000000))})
+		}
+		cards = append(cards, store.Card{Href: fmt.Sprintf("/pb/f%d.vcf", i), ETag: "1",
+			Name: []string{"SPAM: Gewinnspiel", "SPAM: Umfrage", "SPAM: Callcenter", "SPAM: Energie"}[i%4], Numbers: nums})
+	}
+	cards = append(cards, store.Card{Href: "/pb/range.vcf", ETag: "1", Name: "SPAM: Callcenter-Block",
+		Numbers: []store.CardNumber{{Pattern: "+4930120045*"}}})
+	if err := st.ApplyCardChanges(ctx, 10, cards, nil); err != nil {
+		return err
+	}
+	if _, err := st.AddEntries(ctx, store.ManualBlockSource, []store.NewEntry{
+		{Pattern: "+4915199999999", Label: "Inkasso-Betrug"}, {Pattern: "+4969123987*", Label: "Umfrageinstitut"}}); err != nil {
+		return err
+	}
+	if _, err := st.AddEntries(ctx, store.ManualAllowSource, []store.NewEntry{{Pattern: "+4920112345678", Label: "Arztpraxis"}}); err != nil {
+		return err
+	}
+	if existing, _ := st.CardETags(ctx, store.ManualContactsSource); len(existing) > 0 {
+		return nil
+	}
+	for _, f := range friends {
+		if f.name == "" {
+			continue
+		}
+		if _, err := st.SaveCard(ctx, store.Card{SourceID: store.ManualContactsSource, Name: f.name,
+			Numbers: []store.CardNumber{{Pattern: f.num, Label: "mobile"}}}); err != nil {
+			return err
+		}
+	}
 	return nil
 }

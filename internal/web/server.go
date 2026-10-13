@@ -21,6 +21,7 @@ import (
 	"voipd/internal/engine"
 	"voipd/internal/events"
 	"voipd/internal/numbers"
+	"voipd/internal/screening"
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
@@ -58,6 +59,8 @@ type Deps struct {
 	Trunks         Trunks
 	Bus            *events.Bus
 	Stats          *stats.Stats
+	Screening      *screening.Engine
+	Syncer         *screening.Syncer
 	Log            *slog.Logger
 	UI             fs.FS // built web UI (index.html + assets); nil = none
 	DataDir        string
@@ -122,6 +125,23 @@ func New(d Deps) http.Handler {
 			r.Post("/ringgroups", s.saveRingGroup)
 			r.Put("/ringgroups/{id}", s.saveRingGroup)
 			r.Delete("/ringgroups/{id}", s.deleteRingGroup)
+
+			r.Get("/screening", s.getScreening)
+			r.Put("/screening/settings", s.setScreeningSettings)
+			r.Post("/screening/pause", s.pauseScreening)
+			r.Get("/screening/check", s.checkNumber)
+			r.Get("/lists/entries", s.listEntries)
+			r.Post("/lists/entries", s.addEntry)
+			r.Delete("/lists/entries/{id}", s.deleteEntry)
+			r.Post("/lists/import", s.importLists)
+			r.Post("/lists/sources", s.createSource)
+			r.Put("/lists/sources/{id}", s.updateSource)
+			r.Delete("/lists/sources/{id}", s.deleteSource)
+			r.Post("/lists/sources/{id}/sync", s.syncSource)
+			r.Get("/contacts", s.listContacts)
+			r.Post("/contacts", s.createContact)
+			r.Put("/contacts/{id}", s.updateContact)
+			r.Delete("/contacts/{id}", s.deleteContact)
 		})
 	})
 

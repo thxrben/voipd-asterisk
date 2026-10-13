@@ -9,6 +9,7 @@ PBX=${PBX:-voipd-e2e-pbx}
 PEER=${PEER:-voipd-e2e-peer}
 CONTAINERS=()
 VOIPD_PID=
+BG_PIDS=() # helper processes stopped on exit
 
 export VOIPD_ARI_PASSWORD=e2e-ari VOIPD_AMI_PASSWORD=e2e-ami
 export VOIPD_DB_PATH=$WORK/voipd.db VOIPD_GENERATED_DIR=$WORK/gen VOIPD_AREA_CODE=201
@@ -21,6 +22,7 @@ FAIL=0
 
 cleanup() {
 	stop_voipd
+	for p in "${BG_PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
 	if [ -n "${KEEP:-}" ]; then
 		echo "KEEP set: containers ${CONTAINERS[*]} and $WORK left in place"
 		return

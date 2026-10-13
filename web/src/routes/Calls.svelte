@@ -150,7 +150,7 @@
   {#if error}<div class="error-box">{error}</div>{/if}
 
   <section class="card">
-    <div class="body flush"><CallTable {calls} /></div>
+    <div class="body flush"><CallTable {calls} actions={session.isAdmin} /></div>
   </section>
 
   {#if next}

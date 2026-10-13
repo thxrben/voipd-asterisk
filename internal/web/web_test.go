@@ -22,6 +22,7 @@ import (
 	"voipd/internal/engine"
 	"voipd/internal/events"
 	"voipd/internal/numbers"
+	"voipd/internal/screening"
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
@@ -62,6 +63,7 @@ type env struct {
 	st      *store.Store
 	bus     *events.Bus
 	calls   *fakeCalls
+	screen  *screening.Engine
 }
 
 // newEnv starts voipd's web server and a fake OIDC provider. Seeded:
@@ -124,10 +126,19 @@ func newEnv(t *testing.T, mutate func(*config.Auth)) *env {
 	calls := &fakeCalls{}
 	z, _ := numbers.New("DE", "201")
 	applied := &countingApplier{}
+	screen := screening.New(st, z, bus, log)
+	if err := screen.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	syncer := screening.NewSyncer(st, screen, z, bus, log)
+	syncCtx, stopSync := context.WithCancel(context.Background())
+	syncDone := make(chan struct{})
+	go func() { defer close(syncDone); syncer.Run(syncCtx) }()
+	t.Cleanup(func() { stopSync(); <-syncDone })
 	h = New(Deps{Store: st, Numbers: z, Config: applied, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
-		Stats: stats.New(st.DB), Log: log, DataDir: t.TempDir(), StatusEvery: 50 * time.Millisecond,
+		Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Log: log, DataDir: t.TempDir(), StatusEvery: 50 * time.Millisecond,
 		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
-	return &env{t: t, srv: srv, idp: idp, st: st, bus: bus, calls: calls, applied: applied}
+	return &env{t: t, srv: srv, idp: idp, st: st, bus: bus, calls: calls, applied: applied, screen: screen}
 }
 
 type client struct {

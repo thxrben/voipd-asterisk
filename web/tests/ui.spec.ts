@@ -195,3 +195,152 @@ test('users cannot open telephony settings', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'Telephony' })).toHaveCount(0)
   expect((await page.request.get('/api/v1/telephony')).status()).toBe(403)
 })
+
+test('blocking: status, test a number, add, pause and anonymous switch', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept())
+  await loginAs(page, admin)
+  await page.getByRole('link', { name: 'Blocking' }).click()
+  const status = page.locator('section.card.status')
+  await expect(status).toContainText('Blocking is active')
+  const scr = await (await page.request.get('/api/v1/screening')).json()
+  await expect(status).toContainText(`${scr.sizes.block.toLocaleString()} blocked numbers`)
+  await expect(page.locator('section.card', { has: page.getByRole('heading', { name: 'PhoneBlock' }) })).toContainText('synced')
+
+  // Test a number from the PhoneBlock range.
+  await page.getByLabel('Test a number').fill('030 120045 777')
+  await page.getByRole('button', { name: 'Test number' }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Blocked' })).toContainText('PhoneBlock')
+
+  // Add a number, find it, remove it.
+  await page.getByRole('tab', { name: 'Numbers' }).click()
+  await page.getByRole('button', { name: 'Add number' }).click()
+  const dlg = page.getByRole('dialog')
+  await dlg.getByLabel(/^Number/).fill('0201 99*')
+  await dlg.getByRole('button', { name: 'Add' }).click()
+  await expect(dlg.locator('.error')).toBeVisible() // range too short
+  await dlg.getByLabel(/^Number/).fill('0176 55554444')
+  await dlg.getByLabel(/^Comment/).fill('Fake parcel service')
+  await dlg.getByRole('button', { name: 'Add' }).click()
+  await expect(dlg).toBeHidden()
+  await page.getByPlaceholder('Search number or name').fill('55554444')
+  const row = page.locator('tbody tr', { hasText: 'Fake parcel service' })
+  await expect(row).toHaveCount(1)
+  await expect(row).toContainText('017655554444')
+  await row.getByRole('button', { name: /Remove/ }).click()
+  await expect(row).toHaveCount(0)
+
+  // Pause and resume.
+  await page.getByRole('button', { name: '5 min' }).click()
+  await expect(status).toContainText('Blocking is paused')
+  await page.getByRole('button', { name: 'Resume blocking' }).click()
+  await expect(status).toContainText('Blocking is active')
+
+  // Anonymous switch is saved.
+  const anon = page.getByLabel(/Block anonymous callers/)
+  const before = await anon.isChecked()
+  await anon.click()
+  await expect
+    .poll(async () => (await (await page.request.get('/api/v1/screening')).json()).settings.anonymous_block)
+    .toBe(!before)
+  await anon.click()
+  await expect
+    .poll(async () => (await (await page.request.get('/api/v1/screening')).json()).settings.anonymous_block)
+    .toBe(before)
+
+  // PhoneBlock preset in the add-list dialog.
+  await page.getByRole('tab', { name: 'Lists' }).click()
+  await page.getByRole('button', { name: 'Add list' }).click()
+  await dlg.getByRole('button', { name: 'PhoneBlock' }).click()
+  await expect(dlg.getByLabel(/^URL/)).toHaveValue('https://phoneblock.net/phoneblock/contacts/')
+  await expect(dlg.getByLabel(/^CardDAV token/)).toBeVisible()
+  await dlg.getByRole('button', { name: 'Cancel' }).click()
+})
+
+test('blocking: import a CSV file as a new list', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept())
+  await loginAs(page, admin)
+  await page.goto('/blocking?tab=import')
+  const csv = 'number;comment\n0170 1111111;Spam A\n0170 2222222;Spam B\n0170 2222222;dup\nkeine nummer;x\n040 1234*;Range\n'
+  await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'spam-list.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+  await expect(page.getByLabel('Name of the new list')).toHaveValue('spam-list')
+  await page.getByRole('button', { name: 'Check file' }).click()
+  const preview = page.locator('.preview')
+  await expect(preview).toContainText('3valid numbers')
+  await expect(preview).toContainText('1duplicates in the file')
+  await expect(preview).toContainText('1not usable')
+  await page.getByRole('button', { name: 'Import 3 numbers' }).click()
+  await expect(page.locator('.toast', { hasText: '3 numbers imported' })).toBeVisible()
+
+  await page.getByRole('tab', { name: 'Lists' }).click()
+  const card = page.locator('section.card', { has: page.getByRole('heading', { name: 'spam-list' }) })
+  await expect(card).toContainText('3 numbers')
+  await card.getByRole('button', { name: 'Delete spam-list' }).click()
+  await expect(card).toHaveCount(0)
+})
+
+test('call details: block or allow the caller', async ({ page }) => {
+  await loginAs(page, admin)
+  const res = await (await page.request.get('/api/v1/calls?status=answered&direction=inbound&limit=200')).json()
+  const call = res.calls.find((c: { caller: string }) => c.caller === '+441314960001')
+  expect(call).toBeTruthy()
+  await page.goto(`/calls/${call.id}`)
+  await page.getByRole('button', { name: 'Block number' }).click()
+  await expect(page.locator('.qa .badge', { hasText: 'Blocked (My blocklist)' })).toBeVisible()
+  await page.getByRole('button', { name: 'Always allow' }).click()
+  await expect(page.locator('.qa .badge', { hasText: 'Allowed' })).toBeVisible()
+
+  // Clean up both entries.
+  for (const target of ['block', 'allow']) {
+    const list = await (await page.request.get(`/api/v1/lists/entries?target=${target}&q=1314960001`)).json()
+    for (const e of list.entries) {
+      const me = await (await page.request.get('/api/v1/me')).json()
+      await page.request.delete(`/api/v1/lists/entries/${e.id}`, { headers: { 'X-CSRF-Token': me.csrf_token } })
+    }
+  }
+})
+
+test('call log: block a caller from the row menu', async ({ page }) => {
+  await loginAs(page, admin)
+  await page.goto('/calls?q=1314960001')
+  const row = page.locator('tbody tr').first()
+  await row.getByRole('button', { name: 'Block or allow caller' }).click()
+  await row.getByRole('button', { name: 'Block number' }).click()
+  await expect(row.locator('.qa .badge', { hasText: 'Blocked (My blocklist)' })).toBeVisible()
+  await expect(page).toHaveURL(/\/calls\?q=/) // the click did not open the call
+
+  const me = await (await page.request.get('/api/v1/me')).json()
+  const list = await (await page.request.get('/api/v1/lists/entries?target=block&q=1314960001')).json()
+  expect(list.entries.length).toBe(1)
+  await page.request.delete(`/api/v1/lists/entries/${list.entries[0].id}`, { headers: { 'X-CSRF-Token': me.csrf_token } })
+})
+
+test('contacts: add, search, edit and delete', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept())
+  await loginAs(page, admin)
+  await page.getByRole('link', { name: 'Contacts' }).click()
+  await expect(page.locator('tbody tr', { hasText: 'Grandma' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Add contact' }).click()
+  const dlg = page.getByRole('dialog')
+  await dlg.getByLabel(/^Name/).fill('Uncle Bob')
+  await dlg.getByLabel('Number 1', { exact: true }).fill('0171 2468024')
+  await dlg.getByRole('button', { name: '+ Add number' }).click()
+  await dlg.getByLabel('Number 2', { exact: true }).fill('not a number')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg.locator('.num-row .error')).toBeVisible()
+  await dlg.getByLabel('Number 2', { exact: true }).fill('0201 556677')
+  await dlg.getByLabel('Type of number 2').selectOption('home')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg).toBeHidden()
+
+  await page.getByLabel('Search contacts').fill('556677')
+  const row = page.locator('tbody tr', { hasText: 'Uncle Bob' })
+  await expect(row).toContainText('01712468024')
+  await expect(page.locator('tbody tr')).toHaveCount(1)
+
+  const check = await (await page.request.get('/api/v1/screening/check?number=01712468024')).json()
+  expect(check.decision.name).toBe('Uncle Bob')
+
+  await row.getByRole('button', { name: 'Delete Uncle Bob' }).click()
+  await expect(row).toHaveCount(0)
+})

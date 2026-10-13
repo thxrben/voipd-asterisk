@@ -3,7 +3,9 @@
   import { api } from '../lib/api'
   import { clock, dateTime, duration, mosRating, num, phone, time } from '../lib/format'
   import type { CallDetail, Leg } from '../lib/types'
+  import { session } from '../lib/session.svelte'
   import CallBadges from '../components/CallBadges.svelte'
+  import QuickActions from '../components/blocking/QuickActions.svelte'
 
   interface Props {
     id: string
@@ -93,6 +95,9 @@
         {/if}
         {#if c.block_reason}
           <div><div class="muted small">Blocked by</div><div>{c.block_reason}</div></div>
+        {/if}
+        {#if session.isAdmin && c.direction === 'inbound' && c.caller.startsWith('+')}
+          <div class="actions"><div class="muted small">Caller</div><QuickActions number={c.caller} /></div>
         {/if}
       </div>
     </section>

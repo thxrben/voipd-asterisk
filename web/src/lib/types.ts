@@ -266,3 +266,94 @@ export interface Credentials {
   transport: string
   port: number
 }
+
+// --- screening ---
+
+export type ListTarget = 'block' | 'allow' | 'contacts'
+
+export interface ScreeningSettings {
+  anonymous_block: boolean
+  contacts_allowed: boolean
+  paused_until: string | null
+}
+
+export interface ListSource {
+  id: number
+  name: string
+  kind: 'manual' | 'file' | 'url' | 'carddav'
+  target: ListTarget
+  url: string
+  username: string
+  password?: string
+  password_set: boolean
+  interval_min: number
+  enabled: boolean
+  last_sync_at: string | null
+  last_status: '' | 'ok' | 'failed'
+  last_error: string
+  failures: number
+  entries: number
+  cards: number
+}
+
+export interface Screening {
+  settings: ScreeningSettings
+  sizes: Record<ListTarget, number>
+  sources: ListSource[]
+}
+
+export interface ListEntry {
+  id: number
+  source_id: number
+  source_name: string
+  target: ListTarget
+  pattern: string
+  label: string
+  card_name: string
+  hits: number
+  last_hit_at: string | null
+  created_at: string
+}
+
+export interface Decision {
+  block: boolean
+  reason: '' | 'allowlist' | 'contact' | 'paused' | 'anonymous' | 'blocklist'
+  name?: string
+  source?: string
+  entry_id?: number
+  pattern?: string
+}
+
+export interface CheckResult {
+  number: string
+  kind: string
+  display: string
+  decision: Decision
+}
+
+export interface ImportPreview {
+  format: 'text' | 'vcard'
+  valid: number
+  cards: number
+  already_listed: number
+  duplicates: number
+  invalid_count: number
+  invalid: { line?: number; value: string; reason: string }[]
+  sample: { number: string; label: string }[]
+  added?: number
+  source_id?: number
+}
+
+export interface ContactNumber {
+  number: string
+  label: string
+}
+
+export interface Contact {
+  id: number
+  source_id: number
+  source_name?: string
+  name: string
+  org: string
+  numbers: ContactNumber[]
+}

@@ -11,6 +11,10 @@ import (
 type Verdict struct {
 	Block  bool
 	Reason string // shown in history, e.g. "blocklist:phoneblock" or "anonymous"
+	// EntryID is the list entry that matched (blocked or allowed), if any.
+	EntryID int64
+	// CallerName is the caller's name from contacts or the list, if known.
+	CallerName string
 }
 
 // Screener decides whether an inbound call is blocked. Blocked calls are

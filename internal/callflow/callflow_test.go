@@ -136,6 +136,13 @@ func (f *fakeEngine) hangup(id string, cause int) {
 	f.send(engine.ChannelHangup{Meta: at(), ChannelID: id, Cause: cause, CauseText: fmt.Sprint(cause)})
 }
 
+// leave is how Asterisk reports an unanswered caller hanging up: a hangup
+// request and StasisEnd, without ChannelDestroyed.
+func (f *fakeEngine) leave(id string, cause int) {
+	f.send(engine.ChannelHangupRequested{Meta: at(), ChannelID: id, Cause: cause})
+	f.send(engine.ChannelLeft{Meta: at(), ChannelID: id})
+}
+
 type env struct {
 	stop  func() // cancels and waits for the manager to finish
 	done  chan struct{}
@@ -143,7 +150,9 @@ type env struct {
 	st    *store.Store
 	bus   <-chan events.Event
 	block bool
-	m     *Manager
+	// verdict, when set, is returned by the screener instead.
+	verdict *Verdict
+	m       *Manager
 }
 
 // newEnv seeds: trunk "telekom" with DID +492011111111 (line id 1) routed to
@@ -177,6 +186,9 @@ func newEnv(t *testing.T, ringTimeout int, fallback string) *env {
 		Engine: e.eng, Store: st, Numbers: z, Bus: bus,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Screener: ScreenerFunc(func(context.Context, numbers.Number, store.Line) Verdict {
+			if e.verdict != nil {
+				return *e.verdict
+			}
 			if e.block {
 				return Verdict{Block: true, Reason: "test"}
 			}
@@ -377,6 +389,48 @@ func TestStealthBlockNeverRingsExtensions(t *testing.T) {
 	c := e.onlyCall(t)
 	if c.Status != store.CallBlocked || c.BlockReason != "test" {
 		t.Errorf("call = %+v", c)
+	}
+}
+
+func TestBlockedCallerLeavesWithoutDestroyEvent(t *testing.T) {
+	e := newEnv(t, 30, "hangup")
+	e.block = true
+	e.inbound("A", "+491701234567")
+	e.eng.expect(t, "ring A")
+	e.eng.leave("A", engine.CauseNormal)
+	evs := e.events(t)
+	if got := strings.Join(types(evs), ","); got != "call.incoming,call.blocked,call.ended" {
+		t.Errorf("events = %s", got)
+	}
+	if c := e.onlyCall(t); c.Status != store.CallBlocked || c.EndedAt.IsZero() {
+		t.Errorf("call = %+v", c)
+	}
+}
+
+func TestScreeningNameAndEntry(t *testing.T) {
+	e := newEnv(t, 30, "hangup")
+	e.verdict = &Verdict{CallerName: "Oma", EntryID: 7}
+	e.inbound("A", "02011112222")
+	e.eng.expect(t, "ring A")
+	e.eng.expect(t, "originate kitchen")
+	if r := e.eng.originated(t, "kitchen"); r.Caller.Name != "Oma" || r.Caller.Number != "02011112222" {
+		t.Errorf("caller shown to phones = %+v", r.Caller)
+	}
+	e.eng.hangup("A", engine.CauseNormal)
+	e.events(t)
+	if c := e.onlyCall(t); c.CallerName != "Oma" || c.BlockEntryID != 0 {
+		t.Errorf("call = %+v", c)
+	}
+
+	b := newEnv(t, 30, "hangup")
+	b.verdict = &Verdict{Block: true, Reason: "blocklist:PhoneBlock", EntryID: 42, CallerName: "SPAM"}
+	b.inbound("A", "+491701234567")
+	b.eng.expect(t, "ring A")
+	b.eng.hangup("A", engine.CauseNormal)
+	b.events(t)
+	if c := b.onlyCall(t); c.Status != store.CallBlocked || c.BlockEntryID != 42 || c.CallerName != "SPAM" ||
+		c.BlockReason != "blocklist:PhoneBlock" {
+		t.Errorf("blocked call = %+v", c)
 	}
 }
 

@@ -149,6 +149,11 @@ func (e *Engine) pumpARI(ctx context.Context, ws *websocket.Conn) error {
 			e.log.Warn("bad ari event", "err", err)
 			continue
 		}
+		chID := ""
+		if ev.Channel != nil {
+			chID = ev.Channel.ID
+		}
+		e.log.Debug("ari event", "type", ev.Type, "channel", chID)
 		if out := translateARI(ev); out != nil {
 			e.emit(ctx, out)
 		}
@@ -193,7 +198,7 @@ func translateARI(ev ariEvent) engine.Event {
 		if ev.Channel == nil {
 			return nil
 		}
-		return engine.ChannelHangupRequested{Meta: b, ChannelID: ev.Channel.ID}
+		return engine.ChannelHangupRequested{Meta: b, ChannelID: ev.Channel.ID, Cause: ev.Cause}
 	case "ChannelDestroyed":
 		if ev.Channel == nil {
 			return nil

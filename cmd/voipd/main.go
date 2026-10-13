@@ -27,6 +27,7 @@ import (
 	"voipd/internal/events"
 	"voipd/internal/numbers"
 	"voipd/internal/pbx"
+	"voipd/internal/screening"
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
@@ -89,12 +90,18 @@ func run() error {
 		return err
 	}
 	bus := events.NewBus(log.With("component", "events"))
+	screen := screening.New(st, nums, bus, log.With("component", "screening"))
+	if err := screen.Load(ctx); err != nil {
+		return fmt.Errorf("load screening lists: %w", err)
+	}
+	syncer := screening.NewSyncer(st, screen, nums, bus, log.With("component", "lists"))
 	calls := callflow.NewManager(callflow.Deps{
-		Engine:  eng,
-		Store:   st,
-		Numbers: nums,
-		Bus:     bus,
-		Log:     log.With("component", "calls"),
+		Engine:   eng,
+		Store:    st,
+		Numbers:  nums,
+		Screener: screen,
+		Bus:      bus,
+		Log:      log.With("component", "calls"),
 	})
 	sup := trunks.NewSupervisor(eng, bus, st.AddSIPEvent, log.With("component", "trunks"),
 		policy(cfg.Trunks), func() trunks.Load {
@@ -128,7 +135,7 @@ func run() error {
 		Addr: cfg.HTTP.Listen,
 		Handler: web.New(web.Deps{
 			Store: st, Numbers: nums, Config: conf, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
-			Stats: stats.New(st.DB), Log: log.With("component", "web"), UI: webui.FS(),
+			Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Log: log.With("component", "web"), UI: webui.FS(),
 			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -148,7 +155,9 @@ func run() error {
 		}
 		httpDone <- nil
 	}()
-	wg.Add(4)
+	wg.Add(6)
+	go func() { defer wg.Done(); screen.Run(ctx) }()
+	go func() { defer wg.Done(); syncer.Run(ctx) }()
 	go func() { defer wg.Done(); cleanupLoop(ctx, authSvc) }()
 	go func() { defer wg.Done(); superviseLoop(ctx, sup, cfg.Trunks, log) }()
 	go func() { defer wg.Done(); watchNetwork(ctx, cfg, conf, sup, log) }()

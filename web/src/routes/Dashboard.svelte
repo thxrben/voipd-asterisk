@@ -14,6 +14,7 @@
   import TopList from '../components/TopList.svelte'
   import ActiveCalls from '../components/ActiveCalls.svelte'
   import CallTable from '../components/CallTable.svelte'
+  import { session } from '../lib/session.svelte'
   import HealthStrip from '../components/HealthStrip.svelte'
 
   const ranges = [
@@ -175,7 +176,7 @@
       <h2>Recent calls</h2>
       <a href="/calls" onclick={(e) => { e.preventDefault(); router.go('/calls') }}>Call log →</a>
     </header>
-    <div class="body flush"><CallTable calls={recent} compact /></div>
+    <div class="body flush"><CallTable calls={recent} compact actions={session.isAdmin} /></div>
   </section>
 </div>
 

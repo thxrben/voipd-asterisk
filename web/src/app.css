@@ -231,7 +231,8 @@ label {
   border-left: 1px solid var(--border);
 }
 .segmented button[aria-pressed='true'],
-.segmented button[aria-selected='true'] {
+.segmented button[aria-selected='true'],
+.segmented button[aria-checked='true'] {
   background: var(--accent);
   color: var(--accent-text);
 }

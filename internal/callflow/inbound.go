@@ -43,7 +43,11 @@ func (c *call) inbound() {
 	ctx, cancel := c.actx()
 	verdict := c.d.Screener.Screen(ctx, caller, line)
 	cancel()
+	if verdict.CallerName != "" {
+		c.rec.CallerName = verdict.CallerName
+	}
 	if verdict.Block {
+		c.rec.BlockEntryID = verdict.EntryID
 		c.stealthBlock(verdict.Reason)
 		return
 	}
@@ -62,6 +66,9 @@ func (c *call) inbound() {
 	}
 
 	display := c.d.Numbers.Display(caller)
+	if verdict.CallerName != "" {
+		display = verdict.CallerName
+	}
 	party := engine.Party{Name: display, Number: callbackNumber(c.d.Numbers, caller)}
 	var targets []target
 	for i := range group.Members {

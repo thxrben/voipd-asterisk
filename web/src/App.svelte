@@ -3,6 +3,8 @@
   import List from '@lucide/svelte/icons/list'
   import Server from '@lucide/svelte/icons/server'
   import Settings from '@lucide/svelte/icons/settings'
+  import ShieldBan from '@lucide/svelte/icons/shield-ban'
+  import BookUser from '@lucide/svelte/icons/book-user'
   import LogOut from '@lucide/svelte/icons/log-out'
   import Sun from '@lucide/svelte/icons/sun'
   import Moon from '@lucide/svelte/icons/moon'
@@ -18,6 +20,8 @@
   import CallDetail from './routes/CallDetail.svelte'
   import Status from './routes/Status.svelte'
   import Telephony from './routes/Telephony.svelte'
+  import Blocking from './routes/Blocking.svelte'
+  import Contacts from './routes/Contacts.svelte'
   import Toasts from './components/Toasts.svelte'
 
   let loadError = $state('')
@@ -37,6 +41,8 @@
   const nav: NavItem[] = [
     { href: '/', label: 'Dashboard', icon: LayoutDashboard, admin: true },
     { href: '/calls', label: 'Calls', icon: List },
+    { href: '/blocking', label: 'Blocking', icon: ShieldBan, admin: true },
+    { href: '/contacts', label: 'Contacts', icon: BookUser, admin: true },
     { href: '/telephony', label: 'Telephony', icon: Settings, admin: true },
     { href: '/status', label: 'Status', icon: Server, admin: true },
   ]
@@ -48,7 +54,7 @@
 
   // Users without admin rights start on their own call list.
   $effect(() => {
-    const adminPaths = ['/', '/status', '/telephony']
+    const adminPaths = ['/', '/status', '/telephony', '/blocking', '/contacts']
     if (session.state === 'ready' && !session.isAdmin && adminPaths.includes(router.path)) {
       router.go('/calls', true)
     }
@@ -123,6 +129,10 @@
           <Calls />
         {:else if router.path === '/status' && session.isAdmin}
           <Status />
+        {:else if router.path === '/blocking' && session.isAdmin}
+          <Blocking />
+        {:else if router.path === '/contacts' && session.isAdmin}
+          <Contacts />
         {:else if router.path === '/telephony' && session.isAdmin}
           <Telephony />
         {:else if router.path === '/' && session.isAdmin}

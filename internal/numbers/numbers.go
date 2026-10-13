@@ -228,3 +228,50 @@ func itoa(i int) string {
 		}
 	}
 }
+
+// MinPrefixDigits is the shortest number range accepted (digits after the
+// country code), so a typo cannot block a whole country or city.
+const MinPrefixDigits = 6
+
+// Prefix normalizes a number range written with a trailing "*" (e.g.
+// "0201 123*" or "+49201123*") to "+49201123*".
+func (z *Normalizer) Prefix(raw string) (string, bool) {
+	s := clean(raw)
+	if !strings.HasSuffix(s, "*") {
+		return "", false
+	}
+	s = strings.TrimRight(s, "*")
+	switch {
+	case strings.HasPrefix(s, "+"):
+	case strings.HasPrefix(s, "00"):
+		s = "+" + s[2:]
+	case strings.HasPrefix(s, "0"):
+		s = "+" + itoa(z.countryCode) + s[1:]
+	default:
+		return "", false
+	}
+	digits := s[1:]
+	if digits == "" || digitsOnly(digits) != digits {
+		return "", false
+	}
+	cc := atoiPrefix(digits)
+	if cc == 0 || len(digits)-len(itoa(cc)) < MinPrefixDigits {
+		return "", false
+	}
+	return s + "*", true
+}
+
+// atoiPrefix returns the country calling code at the start of digits
+// (1–3 digits), or 0.
+func atoiPrefix(digits string) int {
+	for l := 1; l <= 3 && l <= len(digits); l++ {
+		v := 0
+		for _, r := range digits[:l] {
+			v = v*10 + int(r-'0')
+		}
+		if phonenumbers.GetRegionCodeForCountryCode(v) != "ZZ" {
+			return v
+		}
+	}
+	return 0
+}

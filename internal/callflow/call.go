@@ -2,6 +2,7 @@ package callflow
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -259,9 +260,36 @@ func (c *call) handleCommon(ev engine.Event) *leg {
 			}
 		}
 		return l
-	case engine.ChannelHangup:
+	case engine.ChannelHangupRequested:
+		if l := c.leg(ev.ChannelID); l != nil && l.state != legGone && ev.Cause != 0 {
+			l.cause = ev.Cause // kept in case only ChannelLeft follows
+		}
+		return nil
+	case engine.ChannelLeft:
 		l := c.leg(ev.ChannelID)
 		if l == nil || l.state == legGone {
+			return nil
+		}
+		l.state = legGone
+		l.rec.EndedAt = ev.When()
+		l.rec.HangupCause = "hung up"
+		if l.cause != 0 {
+			l.rec.HangupCause = fmt.Sprintf("hung up (cause %d)", l.cause)
+		}
+		c.saveLeg(l)
+		return l
+	case engine.ChannelHangup:
+		l := c.leg(ev.ChannelID)
+		if l == nil {
+			return nil
+		}
+		if l.state == legGone {
+			// Already gone via ChannelLeft: just record the precise cause.
+			if ev.CauseText != "" {
+				l.cause = ev.Cause
+				l.rec.HangupCause = ev.CauseText
+				c.saveLeg(l)
+			}
 			return nil
 		}
 		l.state = legGone

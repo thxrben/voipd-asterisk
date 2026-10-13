@@ -30,10 +30,12 @@ type Call struct {
 	TrunkID     int64      `json:"trunk_id"` // 0 = none
 	AnsweredBy  string     `json:"answered_by"`
 	BlockReason string     `json:"block_reason"`
-	StartedAt   time.Time  `json:"started_at"`
-	AnsweredAt  time.Time  `json:"answered_at"` // zero = not answered
-	EndedAt     time.Time  `json:"ended_at"`
-	HangupCause string     `json:"hangup_cause"`
+	// BlockEntryID is the list entry that blocked the call (0 = none).
+	BlockEntryID int64     `json:"block_entry_id,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	AnsweredAt   time.Time `json:"answered_at"` // zero = not answered
+	EndedAt      time.Time `json:"ended_at"`
+	HangupCause  string    `json:"hangup_cause"`
 }
 
 type CallLeg struct {
@@ -96,10 +98,10 @@ func (s *Store) InsertCall(ctx context.Context, c Call) error {
 // UpdateCall writes the mutable fields of a call.
 func (s *Store) UpdateCall(ctx context.Context, c Call) error {
 	_, err := s.DB.ExecContext(ctx, `
-		UPDATE calls SET status = ?, caller_name = ?, answered_by = ?, block_reason = ?,
+		UPDATE calls SET status = ?, caller_name = ?, answered_by = ?, block_reason = ?, block_entry_id = ?,
 		       answered_at = ?, ended_at = ?, hangup_cause = ?
 		WHERE id = ?`,
-		c.Status, c.CallerName, c.AnsweredBy, c.BlockReason, ms(c.AnsweredAt), ms(c.EndedAt), c.HangupCause, c.ID)
+		c.Status, c.CallerName, c.AnsweredBy, c.BlockReason, nullID(c.BlockEntryID), ms(c.AnsweredAt), ms(c.EndedAt), c.HangupCause, c.ID)
 	return err
 }
 
@@ -146,9 +148,9 @@ func (s *Store) GetCall(ctx context.Context, id string) (Call, error) {
 	var answered, ended sql.NullInt64
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT id, direction, status, caller, caller_name, callee, trunk_id, answered_by, block_reason,
-		       started_at, answered_at, ended_at, hangup_cause
+		       COALESCE(block_entry_id, 0), started_at, answered_at, ended_at, hangup_cause
 		FROM calls WHERE id = ?`, id).Scan(&c.ID, &c.Direction, &c.Status, &c.Caller, &c.CallerName, &c.Callee,
-		&trunk, &c.AnsweredBy, &c.BlockReason, &started, &answered, &ended, &c.HangupCause)
+		&trunk, &c.AnsweredBy, &c.BlockReason, &c.BlockEntryID, &started, &answered, &ended, &c.HangupCause)
 	if err != nil {
 		return c, notFound(err)
 	}

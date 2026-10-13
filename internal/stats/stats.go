@@ -66,10 +66,9 @@ func (s *Stats) Summary(ctx context.Context, r Range) (Summary, error) {
 		v := float64(int(mos.Float64*100+0.5)) / 100
 		sum.AvgMOS = &v
 	}
-	// The blocklist tables arrive with screening; tolerate their absence.
-	_ = s.db.QueryRowContext(ctx, `SELECT count(*) FROM list_entries e JOIN list_sources s ON s.id = e.source_id
+	err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM list_entries e JOIN list_sources s ON s.id = e.source_id
 		WHERE s.target = 'block' AND s.enabled`).Scan(&sum.BlocklistSize)
-	return sum, nil
+	return sum, err
 }
 
 // Bucket is one point of the calls-over-time chart.

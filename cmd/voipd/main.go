@@ -127,7 +127,7 @@ func run() error {
 	srv := &http.Server{
 		Addr: cfg.HTTP.Listen,
 		Handler: web.New(web.Deps{
-			Store: st, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
+			Store: st, Numbers: nums, Config: conf, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
 			Stats: stats.New(st.DB), Log: log.With("component", "web"), UI: webui.FS(),
 			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
 		}),

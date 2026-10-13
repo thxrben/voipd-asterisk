@@ -2,6 +2,7 @@
   import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard'
   import List from '@lucide/svelte/icons/list'
   import Server from '@lucide/svelte/icons/server'
+  import Settings from '@lucide/svelte/icons/settings'
   import LogOut from '@lucide/svelte/icons/log-out'
   import Sun from '@lucide/svelte/icons/sun'
   import Moon from '@lucide/svelte/icons/moon'
@@ -16,6 +17,8 @@
   import Calls from './routes/Calls.svelte'
   import CallDetail from './routes/CallDetail.svelte'
   import Status from './routes/Status.svelte'
+  import Telephony from './routes/Telephony.svelte'
+  import Toasts from './components/Toasts.svelte'
 
   let loadError = $state('')
   session.load().catch((e: Error) => (loadError = e.message))
@@ -34,6 +37,7 @@
   const nav: NavItem[] = [
     { href: '/', label: 'Dashboard', icon: LayoutDashboard, admin: true },
     { href: '/calls', label: 'Calls', icon: List },
+    { href: '/telephony', label: 'Telephony', icon: Settings, admin: true },
     { href: '/status', label: 'Status', icon: Server, admin: true },
   ]
   const items = $derived(nav.filter((n) => !n.admin || session.isAdmin))
@@ -44,7 +48,8 @@
 
   // Users without admin rights start on their own call list.
   $effect(() => {
-    if (session.state === 'ready' && !session.isAdmin && (router.path === '/' || router.path === '/status')) {
+    const adminPaths = ['/', '/status', '/telephony']
+    if (session.state === 'ready' && !session.isAdmin && adminPaths.includes(router.path)) {
       router.go('/calls', true)
     }
   })
@@ -74,6 +79,8 @@
     navOpen = false
   })
 </script>
+
+<Toasts />
 
 {#if session.state === 'loading'}
   <div class="center muted">{loadError || 'Loading…'}</div>
@@ -116,6 +123,8 @@
           <Calls />
         {:else if router.path === '/status' && session.isAdmin}
           <Status />
+        {:else if router.path === '/telephony' && session.isAdmin}
+          <Telephony />
         {:else if router.path === '/' && session.isAdmin}
           <Dashboard />
         {:else}

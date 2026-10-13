@@ -95,3 +95,103 @@ test('theme toggle and sign out', async ({ page }) => {
   const me = await page.request.get('/api/v1/me')
   expect(me.status()).toBe(401)
 })
+
+test('telephony: line with Telekom preset, number, extension and ring group', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept())
+  await loginAs(page, admin)
+  await page.getByRole('link', { name: 'Telephony' }).click()
+  await expect(page.getByRole('heading', { name: 'Telephony' })).toBeVisible()
+
+  // Line: the preset fills registrar, transport and SRTP.
+  await page.getByRole('button', { name: 'Add line' }).click()
+  const dlg = page.getByRole('dialog')
+  await dlg.getByRole('button', { name: 'Deutsche Telekom' }).click()
+  await expect(dlg.getByLabel(/^Registrar/)).toHaveValue('tel.t-online.de')
+  await dlg.getByLabel(/^Name/).fill('telekom2')
+  await dlg.getByLabel(/^Username/).fill('someone@t-online.de')
+  await dlg.getByLabel(/^Password/).fill('secret')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg).toBeHidden()
+  const card = page.locator('section.card', { has: page.getByRole('heading', { name: 'telekom2' }) })
+  await expect(card.locator('.badge', { hasText: 'Telekom' })).toBeVisible()
+
+  // Number in national format is normalized; an invalid one shows a field error.
+  await card.getByRole('button', { name: 'Number' }).click()
+  await dlg.getByLabel(/^Phone number/).fill('abc')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg.locator('.error')).toBeVisible()
+  await dlg.getByLabel(/^Phone number/).fill('0201 7654321')
+  await dlg.getByLabel(/^Label/).fill('Office')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg).toBeHidden()
+  await expect(card.getByText('Office')).toBeVisible()
+  const tel = await (await page.request.get('/api/v1/telephony')).json()
+  const line = tel.trunks.find((t: { name: string }) => t.name === 'telekom2')
+  expect(line.numbers.map((n: { number: string }) => n.number)).toContain('+492017654321')
+  expect(line.password_set).toBe(true)
+  expect(line.password ?? '').toBe('')
+
+  // Extension: emergency numbers are refused; the username is suggested from the name.
+  await page.getByRole('tab', { name: 'Extensions' }).click()
+  await page.getByRole('button', { name: 'Add extension' }).click()
+  await dlg.getByLabel(/^Extension number/).fill('112')
+  await dlg.getByLabel(/^Name/).fill('Büro Süd')
+  await expect(dlg.getByLabel(/^SIP username/)).toHaveValue('buro-sud')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg.locator('.error')).toBeVisible()
+  await dlg.getByLabel(/^Extension number/).fill('42')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg).toBeHidden()
+  const row = page.locator('tbody tr', { hasText: 'Büro Süd' })
+  await expect(row).toBeVisible()
+
+  // Generated password is shown in the phone setup dialog.
+  await row.getByRole('button', { name: 'Credentials' }).click()
+  await expect(dlg.getByText('buro-sud').first()).toBeVisible()
+  const pw = await dlg.locator('dd code').last().textContent()
+  expect(pw?.length).toBeGreaterThanOrEqual(16)
+  await dlg.getByRole('button', { name: 'Done' }).click()
+
+  // Do not disturb toggle.
+  await row.getByLabel('Do not disturb for 42').check()
+  await expect(row.getByText('on', { exact: true })).toBeVisible()
+
+  // Ring group with the new extension, then route the new number to it.
+  await page.getByRole('tab', { name: 'Ring groups' }).click()
+  await page.getByRole('button', { name: 'Add ring group' }).click()
+  await dlg.getByLabel(/^Name/).fill('Front desk')
+  await dlg.getByText('Büro Süd').click()
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg).toBeHidden()
+  const group = page.locator('section.card', { has: page.getByRole('heading', { name: 'Front desk' }) })
+  await expect(group.getByText('42 Büro Süd')).toBeVisible()
+
+  await page.getByRole('tab', { name: 'Lines' }).click()
+  await card.getByRole('button', { name: 'Edit +492017654321' }).click()
+  await dlg.getByLabel(/^Calls ring/).selectOption({ label: 'Front desk' })
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg).toBeHidden()
+  await page.getByRole('tab', { name: 'Ring groups' }).click()
+  await expect(group.getByText('02017654321')).toBeVisible()
+
+  // A ring group that numbers still use cannot be deleted.
+  await group.getByRole('button', { name: 'Delete Front desk' }).click()
+  await expect(page.locator('.toast', { hasText: 'numbers still ring this group' })).toBeVisible()
+
+  // Clean up the line (numbers go with it), then the group and extension.
+  await page.getByRole('tab', { name: 'Lines' }).click()
+  await card.getByRole('button', { name: 'Delete line telekom2' }).click()
+  await expect(card).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Ring groups' }).click()
+  await group.getByRole('button', { name: 'Delete Front desk' }).click()
+  await expect(group).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Extensions' }).click()
+  await row.getByRole('button', { name: 'Delete 42' }).click()
+  await expect(row).toHaveCount(0)
+})
+
+test('users cannot open telephony settings', async ({ page }) => {
+  await loginAs(page, alice)
+  await expect(page.getByRole('link', { name: 'Telephony' })).toHaveCount(0)
+  expect((await page.request.get('/api/v1/telephony')).status()).toBe(403)
+})

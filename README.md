@@ -22,7 +22,8 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | Trunk supervisor: outage detection, escalation, IP/DNS watchers | done |
 | Web API: OIDC login (authentik), sessions, roles, call log, statistics, live events | done |
 | Web UI: Pi-hole-style dashboard, call log with details, status page (light/dark, mobile) | done |
-| Configuration screens, blocklists, modules (MQTT, webhooks), voicemail, directory, backups | in progress |
+| Telephony configuration in the UI: lines (Telekom preset), numbers, extensions with phone credentials, ring groups, do not disturb | done |
+| Blocklists, modules (MQTT, webhooks), voicemail, directory, backups | in progress |
 
 ## Run
 

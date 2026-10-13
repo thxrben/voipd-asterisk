@@ -7,6 +7,8 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Field errors of a 422 response, keyed by JSON field name. */
+    public fields?: Record<string, string>,
   ) {
     super(message)
   }
@@ -28,12 +30,15 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
   }
   if (!res.ok) {
     let msg = res.statusText
+    let fields: Record<string, string> | undefined
     try {
-      msg = ((await res.json()) as { error?: string }).error ?? msg
+      const body = (await res.json()) as { error?: string; fields?: Record<string, string> }
+      msg = body.error ?? msg
+      fields = body.fields
     } catch {
       /* not JSON */
     }
-    throw new ApiError(res.status, msg)
+    throw new ApiError(res.status, msg, fields)
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T

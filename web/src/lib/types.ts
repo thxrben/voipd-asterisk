@@ -184,3 +184,85 @@ export interface Status {
   }
   events: { at: string; type: string; subject: string; detail: Record<string, unknown> }[]
 }
+
+// --- telephony configuration ---
+
+export interface TrunkNumber {
+  id: number
+  trunk_id: number
+  number: string
+  sip_user: string
+  register: boolean
+  label: string
+  ring_group_id: number
+}
+
+export interface Trunk {
+  id: number
+  name: string
+  enabled: boolean
+  profile: 'generic' | 'telekom'
+  registrar: string
+  outbound_proxy: string
+  transport: 'udp' | 'tcp' | 'tls'
+  address_family: 'auto' | 'v4' | 'v6'
+  auth_username: string
+  password?: string
+  password_set: boolean
+  srtp: boolean
+  dial_format: 'e164' | 'national'
+  codecs: string[]
+  reg_expiration: number
+  numbers: TrunkNumber[]
+}
+
+export interface Extension {
+  id: number
+  number: string
+  name: string
+  enabled: boolean
+  sip_username: string
+  password?: string
+  transport: 'udp' | 'tcp' | 'tls'
+  srtp: boolean
+  codecs: string[]
+  max_contacts: number
+  outbound_number_id: number
+  clir: boolean
+  dnd: boolean
+  owner_subject: string
+  online: number
+}
+
+export interface RingGroup {
+  id: number
+  name: string
+  ring_timeout: number
+  fallback: 'hangup' | 'keep_ringing' | 'voicemail'
+  fallback_extension_id: number
+  members: number[]
+}
+
+export interface User {
+  subject: string
+  username: string
+  name: string
+  email: string
+  role: Role
+}
+
+export interface Telephony {
+  trunks: Trunk[]
+  extensions: Extension[]
+  ring_groups: RingGroup[]
+  users: User[]
+  codecs: string[]
+}
+
+export interface Credentials {
+  username: string
+  password: string
+  auth_username: string
+  transport: string
+  port: number
+}

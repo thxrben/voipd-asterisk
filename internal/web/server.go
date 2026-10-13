@@ -20,6 +20,7 @@ import (
 	"voipd/internal/callflow"
 	"voipd/internal/engine"
 	"voipd/internal/events"
+	"voipd/internal/numbers"
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
@@ -42,8 +43,15 @@ type Trunks interface {
 	Statuses() []trunks.Status
 }
 
+// ConfigApplier re-applies the SIP configuration after changes.
+type ConfigApplier interface {
+	Apply(ctx context.Context) error
+}
+
 type Deps struct {
 	Store          *store.Store
+	Numbers        *numbers.Normalizer
+	Config         ConfigApplier // nil: changes are stored only (tests)
 	Auth           *auth.Service
 	Engine         EngineStatus
 	Calls          Calls
@@ -90,6 +98,7 @@ func New(d Deps) http.Handler {
 		r.Get("/calls", s.listCalls)
 		r.Get("/calls/{id}", s.getCall)
 		r.Get("/events", s.events)
+		r.Put("/extensions/{id}/dnd", s.setDND) // admins and the owner
 
 		r.Group(func(r chi.Router) {
 			r.Use(adminOnly)
@@ -97,6 +106,22 @@ func New(d Deps) http.Handler {
 			r.Get("/stats/dashboard", s.dashboard)
 			r.Get("/audit", s.audit)
 			r.Get("/users", s.users)
+
+			r.Get("/telephony", s.telephony)
+			r.Post("/trunks", s.createTrunk)
+			r.Put("/trunks/{id}", s.updateTrunk)
+			r.Delete("/trunks/{id}", s.deleteTrunk)
+			r.Post("/trunks/{id}/numbers", s.createNumber)
+			r.Put("/numbers/{id}", s.updateNumber)
+			r.Delete("/numbers/{id}", s.deleteNumber)
+			r.Post("/extensions", s.createExtension)
+			r.Put("/extensions/{id}", s.updateExtension)
+			r.Delete("/extensions/{id}", s.deleteExtension)
+			r.Get("/extensions/{id}/credentials", s.extensionCredentials)
+			r.Post("/extensions/{id}/password", s.regeneratePassword)
+			r.Post("/ringgroups", s.saveRingGroup)
+			r.Put("/ringgroups/{id}", s.saveRingGroup)
+			r.Delete("/ringgroups/{id}", s.deleteRingGroup)
 		})
 	})
 

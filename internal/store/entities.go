@@ -45,6 +45,10 @@ type Extension struct {
 	MaxContacts int
 	CLIR        bool
 	DND         bool
+	// OutboundNumberID is the trunk number used for outgoing calls
+	// (0 = first number of the first trunk).
+	OutboundNumberID int64
+	OwnerSubject     string // web UI user linked to this extension
 }
 
 func splitCodecs(s string) []string {

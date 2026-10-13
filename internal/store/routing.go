@@ -26,13 +26,13 @@ type RingGroup struct {
 }
 
 const extensionCols = `e.id, e.number, e.name, e.enabled, e.sip_username, e.sip_password, e.transport, e.srtp,
-	e.codecs, e.max_contacts, e.clir, e.dnd`
+	e.codecs, e.max_contacts, e.clir, e.dnd, COALESCE(e.outbound_number_id, 0), e.owner_subject`
 
 func scanExtension(sc interface{ Scan(...any) error }) (Extension, error) {
 	var e Extension
 	var codecs string
 	err := sc.Scan(&e.ID, &e.Number, &e.Name, &e.Enabled, &e.SIPUsername, &e.SIPPassword,
-		&e.Transport, &e.SRTP, &codecs, &e.MaxContacts, &e.CLIR, &e.DND)
+		&e.Transport, &e.SRTP, &codecs, &e.MaxContacts, &e.CLIR, &e.DND, &e.OutboundNumberID, &e.OwnerSubject)
 	e.Codecs = splitCodecs(codecs)
 	return e, err
 }

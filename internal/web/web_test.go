@@ -21,6 +21,7 @@ import (
 	"voipd/internal/config"
 	"voipd/internal/engine"
 	"voipd/internal/events"
+	"voipd/internal/numbers"
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
@@ -48,13 +49,19 @@ func (fakeTrunks) Statuses() []trunks.Status {
 		Number: "+492011111111"}, Up: true}}
 }
 
+// countingApplier records how often the configuration was re-applied.
+type countingApplier struct{ n int }
+
+func (a *countingApplier) Apply(context.Context) error { a.n++; return nil }
+
 type env struct {
-	t     *testing.T
-	srv   *httptest.Server
-	idp   *oidctest.Provider
-	st    *store.Store
-	bus   *events.Bus
-	calls *fakeCalls
+	applied *countingApplier
+	t       *testing.T
+	srv     *httptest.Server
+	idp     *oidctest.Provider
+	st      *store.Store
+	bus     *events.Bus
+	calls   *fakeCalls
 }
 
 // newEnv starts voipd's web server and a fake OIDC provider. Seeded:
@@ -115,10 +122,12 @@ func newEnv(t *testing.T, mutate func(*config.Auth)) *env {
 	}
 	bus := events.NewBus(log)
 	calls := &fakeCalls{}
-	h = New(Deps{Store: st, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
+	z, _ := numbers.New("DE", "201")
+	applied := &countingApplier{}
+	h = New(Deps{Store: st, Numbers: z, Config: applied, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
 		Stats: stats.New(st.DB), Log: log, DataDir: t.TempDir(), StatusEvery: 50 * time.Millisecond,
 		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
-	return &env{t: t, srv: srv, idp: idp, st: st, bus: bus, calls: calls}
+	return &env{t: t, srv: srv, idp: idp, st: st, bus: bus, calls: calls, applied: applied}
 }
 
 type client struct {
@@ -186,13 +195,13 @@ func (c *client) getJSON(path string, want int, v any) {
 var (
 	alice = oidctest.User{Subject: "alice", Username: "alice", Name: "Alice", Email: "alice@example.com",
 		Groups: []string{"voipd-users"}}
-	admin = oidctest.User{Subject: "root", Username: "root", Name: "Root", Groups: []string{"family", "voipd-admins"}}
+	adminUser = oidctest.User{Subject: "root", Username: "root", Name: "Root", Groups: []string{"family", "voipd-admins"}}
 )
 
 func TestOIDCLoginAndRoles(t *testing.T) {
 	e := newEnv(t, nil)
 
-	a, resp := e.login(admin)
+	a, resp := e.login(adminUser)
 	if resp.Request.URL.Path != "/calls" {
 		t.Errorf("redirected to %s after login, want the return path", resp.Request.URL.Path)
 	}
@@ -232,7 +241,7 @@ func TestLoginDeniedWithoutGroup(t *testing.T) {
 
 func TestGroupsFromUserInfo(t *testing.T) {
 	e := newEnv(t, nil)
-	u := admin
+	u := adminUser
 	u.GroupsInUserInfo = true
 	c, _ := e.login(u)
 	var me map[string]any
@@ -244,11 +253,11 @@ func TestGroupsFromUserInfo(t *testing.T) {
 
 func TestCustomGroupNames(t *testing.T) {
 	e := newEnv(t, func(c *config.Auth) { c.AdminGroup = "pbx-admin" })
-	c, resp := e.login(admin) // in voipd-admins, which is no longer the admin group
+	c, resp := e.login(adminUser) // in voipd-admins, which is no longer the admin group
 	if resp.StatusCode != 403 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	u := admin
+	u := adminUser
 	u.Groups = []string{"pbx-admin"}
 	c, _ = e.login(u)
 	c.getJSON("/api/v1/status", 200, nil)
@@ -267,7 +276,7 @@ func TestCallVisibilityForUsers(t *testing.T) {
 	u.getJSON("/api/v1/calls/c-alice", 200, nil)
 	u.getJSON("/api/v1/calls/c-other", 404, nil)
 
-	a, _ := e.login(admin)
+	a, _ := e.login(adminUser)
 	a.getJSON("/api/v1/calls", 200, &list)
 	if len(list.Calls) != 3 || list.Calls[0].ID != "c-blocked" {
 		t.Fatalf("admin sees %+v", list.Calls)
@@ -288,7 +297,7 @@ func TestCallVisibilityForUsers(t *testing.T) {
 
 func TestCSRFRequiredForChanges(t *testing.T) {
 	e := newEnv(t, nil)
-	a, _ := e.login(admin)
+	a, _ := e.login(adminUser)
 	resp := a.do("POST", "/api/v1/me", strings.NewReader("{}"), false)
 	resp.Body.Close()
 	if resp.StatusCode != 403 {
@@ -304,7 +313,7 @@ func TestCSRFRequiredForChanges(t *testing.T) {
 
 func TestLogout(t *testing.T) {
 	e := newEnv(t, nil)
-	a, _ := e.login(admin)
+	a, _ := e.login(adminUser)
 	resp := a.do("POST", "/auth/logout", nil, false)
 	var out map[string]string
 	json.NewDecoder(resp.Body).Decode(&out)
@@ -356,7 +365,7 @@ func TestLocalAdmin(t *testing.T) {
 
 func TestDashboard(t *testing.T) {
 	e := newEnv(t, nil)
-	a, _ := e.login(admin)
+	a, _ := e.login(adminUser)
 	var d struct {
 		Summary stats.Summary               `json:"summary"`
 		Series  []stats.Bucket              `json:"series"`
@@ -404,7 +413,7 @@ func readSSE(t *testing.T, resp *http.Response, n int, timeout time.Duration) []
 func TestEventStreamFiltersForUsers(t *testing.T) {
 	e := newEnv(t, nil)
 	u, _ := e.login(alice)
-	a, _ := e.login(admin)
+	a, _ := e.login(adminUser)
 	ur := u.do("GET", "/api/v1/events", nil, false)
 	defer ur.Body.Close()
 	ar := a.do("GET", "/api/v1/events", nil, false)
@@ -455,7 +464,7 @@ func TestClientIPBehindTrustedProxy(t *testing.T) {
 
 func TestOpenRedirectRejected(t *testing.T) {
 	e := newEnv(t, nil)
-	e.idp.SetUser(admin)
+	e.idp.SetUser(adminUser)
 	c := e.client()
 	resp, err := c.hc.Get(e.srv.URL + "/auth/login?return=" + url.QueryEscape("//evil.example/x"))
 	if err != nil {

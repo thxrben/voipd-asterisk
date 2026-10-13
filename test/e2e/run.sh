@@ -22,6 +22,7 @@ log "seed database"
 seed "$PEER_IP:5060"
 
 log "start pbx + voipd"
+export VOIPD_ADMIN_PASSWORD_HASH=$(echo "e2e-admin-password" | "$WORK/voipd" hash-password 2>/dev/null)
 start_voipd
 start_pbx
 
@@ -107,5 +108,39 @@ n=$((n + 1))
 wait_for "internal call finished" 30 calls_done $n
 check "status" answered "$(last_call status)"
 check "answered by" 11 "$(last_call answered_by)"
+
+log "scenario: configuration through the web API reaches Asterisk"
+JAR=$WORK/cookies
+API=http://127.0.0.1:$HTTP_PORT
+curl -s -c "$JAR" -o /dev/null -H 'Content-Type: application/json' \
+	-d '{"username":"admin","password":"e2e-admin-password"}' "$API/auth/local"
+CSRF=$(curl -s -b "$JAR" "$API/api/v1/me" | sed -n 's/.*"csrf_token":"\([^"]*\)".*/\1/p')
+api() { # api METHOD PATH [JSON]
+	curl -s -b "$JAR" -X "$1" -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' ${3:+-d "$3"} "$API/api/v1$2"
+}
+endpoint_exists() { pbx "pjsip show endpoints" | grep -q "Endpoint:  $1/"; }
+endpoint_gone() { ! endpoint_exists "$1"; }
+check "admin logged in" 1 "$([ -n "$CSRF" ] && echo 1)"
+created=$(api POST /extensions '{"id":0,"number":"13","name":"Hall","enabled":true,"sip_username":"hall","password":"","transport":"udp","srtp":false,"codecs":["g722","alaw"],"max_contacts":2,"outbound_number_id":0,"clir":false,"dnd":false,"owner_subject":""}')
+check "extension created without warning" 0 "$(grep -c '"warning"' <<<"$created")"
+HALL=$(sed -n 's/.*"id":\([0-9]*\).*/\1/p' <<<"$created")
+wait_for "new endpoint loaded in Asterisk" 15 endpoint_exists hall
+endpoint_exists hall && ok "new endpoint loaded in Asterisk"
+check "existing phones stay registered" 1 "$(phone_up kitchen && phone_up office && echo 1)"
+api DELETE "/extensions/$HALL" >/dev/null
+wait_for "deleted endpoint removed from Asterisk" 15 endpoint_gone hall
+endpoint_gone hall && ok "deleted endpoint removed from Asterisk"
+
+log "scenario: do not disturb set through the API"
+check "dnd set" 1 "$(api PUT /extensions/1/dnd '{"dnd":true}' | grep -c '"dnd":true')"
+peer "database put test phone10 ring" >/dev/null
+peer "database put test phone11 ring" >/dev/null
+peer "channel originate Local/call@carrier-out application Wait 15" >/dev/null
+n=$((n + 1))
+wait_for "call finished" 30 calls_done $n
+check "status" missed "$(last_call status)"
+check "only phone 11 rang" "1|1" \
+	"$(sql "SELECT count(*), sum(endpoint LIKE '%office%') FROM call_legs WHERE call_id='$(last_call id)' AND kind='extension'")"
+api PUT /extensions/1/dnd '{"dnd":false}' >/dev/null
 
 summary

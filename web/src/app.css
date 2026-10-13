@@ -230,7 +230,8 @@ label {
 .segmented button + button {
   border-left: 1px solid var(--border);
 }
-.segmented button[aria-pressed='true'] {
+.segmented button[aria-pressed='true'],
+.segmented button[aria-selected='true'] {
   background: var(--accent);
   color: var(--accent-text);
 }

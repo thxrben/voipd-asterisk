@@ -21,7 +21,8 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | Call history with per-leg quality (codec, loss, jitter, RTT, MOS) | done |
 | Trunk supervisor: outage detection, escalation, IP/DNS watchers | done |
 | Web API: OIDC login (authentik), sessions, roles, call log, statistics, live events | done |
-| Web UI, blocklists, modules (MQTT, webhooks), voicemail, directory, backups | in progress |
+| Web UI: Pi-hole-style dashboard, call log with details, status page (light/dark, mobile) | done |
+| Configuration screens, blocklists, modules (MQTT, webhooks), voicemail, directory, backups | in progress |
 
 ## Run
 
@@ -104,7 +105,12 @@ test/e2e/dns.sh         # Telekom-like NAPTR/SRV with two servers and two number
                         # per-number routing, failover, no re-registration during calls (~6 min)
 test/e2e/chaos.sh       # trunk outages, auth rejection, DNS failure, carrier IP move,
                         # engine restarts; asserts detection and bounded recovery (~12 min)
+test/e2e/ui.sh          # web UI in Chrome (Playwright) with demo data and a fake OIDC provider (~30 s)
 ```
+
+UI development: `go run ./test/devseed -db /tmp/demo.db` creates demo data;
+run voipd against it (`VOIPD_HTTP_LISTEN=127.0.0.1:18080`) and
+`npm run dev` in `web/` (proxies the API to that port).
 
 The e2e suites need Docker, Go and `sqlite3`, build `deploy/asterisk` first
 (`docker build -t voipd-asterisk:22.11.0 deploy/asterisk`), and use ports

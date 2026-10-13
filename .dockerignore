@@ -3,3 +3,6 @@ deploy/
 web/node_modules/
 .git/
 *.db*
+web/dist/
+web/test-results/
+web/playwright-report/

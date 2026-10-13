@@ -51,11 +51,12 @@ func TestStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if BucketSize(r) != 10*time.Minute || len(ts) != 145 {
+	if BucketSize(r) != 30*time.Minute || len(ts) != 49 {
 		t.Fatalf("buckets: size %s, n %d", BucketSize(r), len(ts))
 	}
-	if ts[0].Answered != 1 || ts[0].Blocked != 1 || ts[2].Blocked != 1 || ts[7].Missed != 1 || ts[12].Outbound != 1 {
-		t.Errorf("unexpected buckets: %+v %+v %+v %+v", ts[0], ts[2], ts[7], ts[12])
+	// Calls at 0, 5, 25 min (bucket 0), 70 min (bucket 2), 120 min (bucket 4).
+	if ts[0].Answered != 1 || ts[0].Blocked != 2 || ts[2].Missed != 1 || ts[4].Outbound != 1 {
+		t.Errorf("unexpected buckets: %+v %+v %+v", ts[0], ts[2], ts[4])
 	}
 
 	top, err := s.Top(ctx, TopBlocked, r, 5)

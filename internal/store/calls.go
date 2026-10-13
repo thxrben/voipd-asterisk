@@ -21,19 +21,19 @@ const (
 )
 
 type Call struct {
-	ID          string
-	Direction   string // inbound | outbound | internal
-	Status      CallStatus
-	Caller      string
-	CallerName  string
-	Callee      string
-	TrunkID     int64 // 0 = none
-	AnsweredBy  string
-	BlockReason string
-	StartedAt   time.Time
-	AnsweredAt  time.Time // zero = not answered
-	EndedAt     time.Time
-	HangupCause string
+	ID          string     `json:"id"`
+	Direction   string     `json:"direction"` // inbound | outbound | internal
+	Status      CallStatus `json:"status"`
+	Caller      string     `json:"caller"`
+	CallerName  string     `json:"caller_name"`
+	Callee      string     `json:"callee"`
+	TrunkID     int64      `json:"trunk_id"` // 0 = none
+	AnsweredBy  string     `json:"answered_by"`
+	BlockReason string     `json:"block_reason"`
+	StartedAt   time.Time  `json:"started_at"`
+	AnsweredAt  time.Time  `json:"answered_at"` // zero = not answered
+	EndedAt     time.Time  `json:"ended_at"`
+	HangupCause string     `json:"hangup_cause"`
 }
 
 type CallLeg struct {

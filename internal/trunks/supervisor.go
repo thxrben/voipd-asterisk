@@ -83,9 +83,9 @@ func DefaultPolicy() Policy {
 
 // Line identifies one registration and what it belongs to.
 type Line struct {
-	Registration string // engine registration id
-	Trunk        string
-	Number       string
+	Registration string `json:"registration"` // engine registration id
+	Trunk        string `json:"trunk"`
+	Number       string `json:"number"`
 }
 
 // Status is a registration's current health, for the UI and API.

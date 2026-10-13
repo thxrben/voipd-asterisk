@@ -2,6 +2,14 @@
 # Raspberry Pi is just GOARCH=arm64; with buildx:
 #   docker buildx build --platform linux/arm64,linux/amd64 -t voipd .
 # Without buildx it builds for the host architecture (e.g. on the Pi).
+# Web UI: built once (it is platform independent) and embedded into voipd.
+FROM node:24-alpine AS ui
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
 FROM golang:1.27.2 AS build
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -9,15 +17,19 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+COPY --from=ui /web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/voipd ./cmd/voipd \
-    && mkdir -p /out/data
+    && mkdir -p /out/data /out/generated
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/voipd /usr/local/bin/voipd
 # A fresh named volume copies this directory's ownership, so voipd can
 # create its database without running as root.
 COPY --from=build --chown=65532:65532 /out/data /var/lib/voipd
+# Same for the generated Asterisk config: voipd starts first and must be
+# able to write it into a fresh shared volume.
+COPY --from=build --chown=65532:65532 /out/generated /etc/asterisk/voipd
 # 65532 = distroless "nonroot"; must match VOIPD_UID in the asterisk service.
 USER 65532:65532
 VOLUME /var/lib/voipd

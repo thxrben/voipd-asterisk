@@ -363,7 +363,7 @@ func TestDashboard(t *testing.T) {
 		Top     map[string][]stats.TopEntry `json:"top"`
 	}
 	a.getJSON("/api/v1/stats/dashboard?range=24h", 200, &d)
-	if d.Summary.Total != 3 || d.Summary.Blocked != 1 || len(d.Series) != 145 || len(d.Top["blocked"]) != 1 {
+	if d.Summary.Total != 3 || d.Summary.Blocked != 1 || len(d.Series) != 49 || len(d.Top["blocked"]) != 1 {
 		t.Errorf("dashboard = %+v", d.Summary)
 	}
 	a.getJSON("/api/v1/stats/dashboard?range=1y", 400, nil)

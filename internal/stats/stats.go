@@ -82,12 +82,12 @@ type Bucket struct {
 	Internal int       `json:"internal"`
 }
 
-// BucketSize picks a resolution for a range: 10 min up to a day, hourly
-// up to a week, daily beyond.
+// BucketSize picks a resolution for a range: 30 min up to a day, hourly
+// up to a week, daily beyond (roughly 30–170 bars).
 func BucketSize(r Range) time.Duration {
 	switch d := r.To.Sub(r.From); {
 	case d <= 25*time.Hour:
-		return 10 * time.Minute
+		return 30 * time.Minute
 	case d <= 8*24*time.Hour:
 		return time.Hour
 	default:

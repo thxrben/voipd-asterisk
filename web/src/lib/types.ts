@@ -114,6 +114,7 @@ export interface Dashboard {
   series: Bucket[]
   outcomes: Record<string, number>
   top: Record<'blocked' | 'callers' | 'missed' | 'called', TopEntry[]>
+  voicemail_new: number
 }
 
 export interface ActiveCall {
@@ -429,4 +430,34 @@ export interface MqttConfig {
   commands: boolean
   discovery: boolean
   discovery_prefix: string
+}
+
+// --- voicemail ---
+
+export interface Mailbox {
+  extension_id: number
+  extension: string
+  name: string
+  new: number
+  old: number
+  greeting: boolean
+}
+
+export interface VoicemailMessage {
+  id: string
+  extension_id: number
+  extension: string
+  call_id: string
+  caller: string
+  caller_name: string
+  received_at: string
+  duration_ms: number
+  heard: boolean
+  heard_at: string | null
+}
+
+export interface PhoneCode {
+  code: string
+  name: string
+  description: string
 }

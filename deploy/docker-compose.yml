@@ -15,6 +15,8 @@ services:
       VOIPD_UID: "65532"
     volumes:
       - asterisk-generated:/etc/asterisk/voipd
+      # Voicemail messages and greetings, shared with voipd.
+      - voicemail:/var/spool/asterisk/recording
     healthcheck:
       test: ["CMD", "asterisk", "-rx", "core show uptime"]
       interval: 30s
@@ -34,10 +36,13 @@ services:
     environment:
       VOIPD_GENERATED_DIR: /etc/asterisk/voipd
       VOIPD_DB_PATH: /var/lib/voipd/voipd.db
+      VOIPD_VOICEMAIL_DIR: /var/lib/voipd/voicemail
     volumes:
       - asterisk-generated:/etc/asterisk/voipd
       - voipd-data:/var/lib/voipd
+      - voicemail:/var/lib/voipd/voicemail
 
 volumes:
   asterisk-generated:
   voipd-data:
+  voicemail:

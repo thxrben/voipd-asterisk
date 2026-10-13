@@ -7,10 +7,13 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"flag"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"os"
+	"path/filepath"
 	"time"
 
 	"voipd/internal/store"
@@ -21,12 +24,13 @@ func main() {
 	days := flag.Int("days", 30, "days of history")
 	seed := flag.Uint64("seed", 1, "random seed")
 	owner := flag.String("owner", "", "OIDC subject (e.g. oidc:alice) owning extension 10")
+	vmDir := flag.String("vm-dir", "", "voicemail directory (VOIPD_VOICEMAIL_DIR); seeds messages if set")
 	flag.Parse()
 	if *db == "" {
 		fmt.Fprintln(os.Stderr, "devseed: -db is required")
 		os.Exit(2)
 	}
-	if err := run(*db, *days, *seed, *owner); err != nil {
+	if err := run(*db, *days, *seed, *owner, *vmDir); err != nil {
 		fmt.Fprintln(os.Stderr, "devseed:", err)
 		os.Exit(1)
 	}
@@ -44,7 +48,7 @@ var (
 	users = map[string]string{"10": "kitchen", "11": "office", "12": "bedroom"}
 )
 
-func run(path string, days int, seed uint64, owner string) error {
+func run(path string, days int, seed uint64, owner, vmDir string) error {
 	ctx := context.Background()
 	st, err := store.Open(ctx, path)
 	if err != nil {
@@ -73,6 +77,11 @@ func run(path string, days int, seed uint64, owner string) error {
 
 	if err := seedLists(ctx, st, r); err != nil {
 		return err
+	}
+	if vmDir != "" {
+		if err := seedVoicemail(ctx, st, vmDir); err != nil {
+			return err
+		}
 	}
 
 	now := time.Now()
@@ -268,4 +277,70 @@ func seedLists(ctx context.Context, st *store.Store, r *rand.Rand) error {
 		}
 	}
 	return nil
+}
+
+// seedVoicemail lets the home group go to the kitchen's mailbox and adds
+// messages (tones as audio) to the kitchen's and the office's mailboxes.
+func seedVoicemail(ctx context.Context, st *store.Store, dir string) error {
+	if _, err := st.DB.ExecContext(ctx, `UPDATE ring_groups SET fallback = 'voicemail', fallback_extension_id = 1 WHERE id = 1`); err != nil {
+		return err
+	}
+	now := time.Now()
+	for i, m := range []struct {
+		ext, id, caller, name string
+		ago                   time.Duration
+		seconds               int
+		heard                 bool
+	}{
+		{"10", "demo-vm-1", "+491701234567", "Mom", 25 * time.Minute, 7, false},
+		{"10", "demo-vm-2", "+491609988776", "Jonas", 3 * time.Hour, 4, false},
+		{"10", "demo-vm-3", "+492019876543", "Dentist Dr. Weber", 26 * time.Hour, 12, true},
+		{"11", "demo-vm-4", "+492118765432", "Insurance", 50 * time.Minute, 9, false},
+	} {
+		extID := int64(1)
+		if m.ext == "11" {
+			extID = 2
+		}
+		at := now.Add(-m.ago)
+		if err := st.AddVoicemail(ctx, store.Voicemail{ID: m.id, ExtensionID: extID, Caller: m.caller, CallerName: m.name,
+			ReceivedAt: at, DurationMS: int64(m.seconds) * 1000}); err != nil {
+			return err
+		}
+		if m.heard {
+			st.SetHeard(ctx, m.id, true, at.Add(time.Hour))
+		}
+		d := filepath.Join(dir, "vm", m.ext)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(d, m.id+".wav"), toneWAV(m.seconds, 330+float64(i)*110), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// toneWAV is an 8 kHz mono PCM WAV of a quiet, pulsing tone.
+func toneWAV(seconds int, freq float64) []byte {
+	const rate = 8000
+	n := seconds * rate
+	b := make([]byte, 44+2*n)
+	copy(b, "RIFF")
+	binary.LittleEndian.PutUint32(b[4:], uint32(36+2*n))
+	copy(b[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(b[16:], 16)
+	binary.LittleEndian.PutUint16(b[20:], 1)
+	binary.LittleEndian.PutUint16(b[22:], 1)
+	binary.LittleEndian.PutUint32(b[24:], rate)
+	binary.LittleEndian.PutUint32(b[28:], rate*2)
+	binary.LittleEndian.PutUint16(b[32:], 2)
+	binary.LittleEndian.PutUint16(b[34:], 16)
+	copy(b[36:], "data")
+	binary.LittleEndian.PutUint32(b[40:], uint32(2*n))
+	for i := range n {
+		t := float64(i) / rate
+		v := 0.2 * math.Sin(2*math.Pi*freq*t) * (0.5 + 0.5*math.Sin(2*math.Pi*1.5*t))
+		binary.LittleEndian.PutUint16(b[44+2*i:], uint16(int16(v*32767)))
+	}
+	return b
 }

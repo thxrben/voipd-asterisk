@@ -216,6 +216,19 @@ func translateARI(ev ariEvent) engine.Event {
 		}
 		return engine.PlaybackFinished{Meta: b, PlaybackID: ev.Playback.ID,
 			ChannelID: strings.TrimPrefix(ev.Playback.TargetURI, "channel:")}
+	case "RecordingFinished":
+		if ev.Recording == nil {
+			return nil
+		}
+		return engine.RecordingFinished{Meta: b, Name: ev.Recording.Name,
+			ChannelID: strings.TrimPrefix(ev.Recording.TargetURI, "channel:"),
+			Duration:  time.Duration(ev.Recording.Duration) * time.Second}
+	case "RecordingFailed":
+		if ev.Recording == nil {
+			return nil
+		}
+		return engine.RecordingFailed{Meta: b, Name: ev.Recording.Name,
+			ChannelID: strings.TrimPrefix(ev.Recording.TargetURI, "channel:"), Cause: ev.Recording.Cause}
 	}
 	return nil
 }
@@ -415,10 +428,41 @@ func (e *Engine) DestroyBridge(ctx context.Context, bridgeID string) error {
 	return err
 }
 
-func (e *Engine) Play(ctx context.Context, id, media string) (string, error) {
+func (e *Engine) Play(ctx context.Context, id string, media ...string) (string, error) {
 	var p ariPlayback
-	err := e.ari.do(ctx, "POST", "/channels/"+url.PathEscape(id)+"/play", url.Values{"media": {media}}, nil, &p)
+	err := e.ari.do(ctx, "POST", "/channels/"+url.PathEscape(id)+"/play", url.Values{"media": media}, nil, &p)
 	return p.ID, err
+}
+
+func (e *Engine) StopPlayback(ctx context.Context, id string) error {
+	err := e.ari.do(ctx, "DELETE", "/playbacks/"+url.PathEscape(id), nil, nil, nil)
+	var ae *ariError
+	if errors.As(err, &ae) && ae.Status == 404 {
+		return nil // already finished
+	}
+	return err
+}
+
+func (e *Engine) Record(ctx context.Context, id string, r engine.RecordRequest) error {
+	q := url.Values{"name": {r.Name}, "format": {r.Format}, "ifExists": {"overwrite"}, "beep": {"false"}}
+	if r.Format == "" {
+		q.Set("format", "wav")
+	}
+	if r.MaxDuration > 0 {
+		q.Set("maxDurationSeconds", strconv.Itoa(int(r.MaxDuration.Seconds())))
+	}
+	if r.MaxSilence > 0 {
+		q.Set("maxSilenceSeconds", strconv.Itoa(int(r.MaxSilence.Seconds())))
+	}
+	if r.TerminateOn != "" {
+		q.Set("terminateOn", r.TerminateOn)
+	}
+	return e.ari.do(ctx, "POST", "/channels/"+url.PathEscape(id)+"/record", q, nil, nil)
+}
+
+func (e *Engine) SetMWI(ctx context.Context, mailbox string, newMsgs, oldMsgs int) error {
+	q := url.Values{"newMessages": {strconv.Itoa(newMsgs)}, "oldMessages": {strconv.Itoa(oldMsgs)}}
+	return e.ari.do(ctx, "PUT", "/mailboxes/"+url.PathEscape(mailbox), q, nil, nil)
 }
 
 func (e *Engine) ChannelVar(ctx context.Context, id, name string) (string, error) {

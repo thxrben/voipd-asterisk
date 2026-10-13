@@ -129,7 +129,7 @@
     />
   </div>
 
-  <HealthStrip {status} summary={data?.summary ?? null} />
+  <HealthStrip {status} summary={data?.summary ?? null} voicemailNew={data?.voicemail_new ?? 0} />
 
   <div class="row two">
     <section class="card">

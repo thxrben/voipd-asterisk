@@ -52,6 +52,7 @@ type call struct {
 	order  []*leg          // dialed legs in dial order, for deterministic iteration
 	bridge string
 	rung   []string // extension numbers rung for an inbound call
+	digits []string // keys pressed while no prompt waited for them
 }
 
 func newCall(ctx context.Context, m *Manager, ch engine.Channel) *call {

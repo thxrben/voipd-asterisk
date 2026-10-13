@@ -49,6 +49,8 @@ type Extension struct {
 	// (0 = first number of the first trunk).
 	OutboundNumberID int64
 	OwnerSubject     string // web UI user linked to this extension
+	// VoicemailGreeting: a personal greeting exists (set with SetGreeting).
+	VoicemailGreeting bool
 }
 
 func splitCodecs(s string) []string {

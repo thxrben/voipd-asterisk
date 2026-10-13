@@ -78,6 +78,10 @@ type Asterisk struct {
 
 type Store struct {
 	Path string `yaml:"path"`
+	// VoicemailDir is Asterisk's recording directory as voipd sees it
+	// (a volume shared with the Asterisk container): voicemail messages
+	// and greetings.
+	VoicemailDir string `yaml:"voicemail_dir"`
 }
 
 type HTTP struct {
@@ -126,7 +130,7 @@ func Default() Config {
 			ReconnectMin: time.Second,
 			ReconnectMax: 30 * time.Second,
 		},
-		Store: Store{Path: "/var/lib/voipd/voipd.db"},
+		Store: Store{Path: "/var/lib/voipd/voipd.db", VoicemailDir: "/var/lib/voipd/voicemail"},
 		Auth: Auth{
 			GroupsClaim: "groups",
 			AdminGroup:  "voipd-admins",
@@ -181,6 +185,7 @@ func applyEnv(c *Config) {
 		"VOIPD_AMI_PASSWORD":  &c.Asterisk.AMIPassword,
 		"VOIPD_GENERATED_DIR": &c.Asterisk.GeneratedDir,
 		"VOIPD_DB_PATH":       &c.Store.Path,
+		"VOIPD_VOICEMAIL_DIR": &c.Store.VoicemailDir,
 		"VOIPD_HTTP_LISTEN":   &c.HTTP.Listen,
 		"VOIPD_COUNTRY":       &c.Numbers.Country,
 		"VOIPD_AREA_CODE":     &c.Numbers.AreaCode,

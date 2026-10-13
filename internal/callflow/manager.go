@@ -22,6 +22,7 @@ import (
 	"voipd/internal/events"
 	"voipd/internal/numbers"
 	"voipd/internal/store"
+	"voipd/internal/voicemail"
 )
 
 // Entry arguments set by the Asterisk dialplan / our originates.
@@ -38,6 +39,9 @@ type Deps struct {
 	Bus      *events.Bus
 	Log      *slog.Logger
 	Screener Screener // nil = allow everything
+	// Voicemail runs mailboxes; nil = ring groups with a voicemail
+	// fallback hang up instead, and *98 is unavailable.
+	Voicemail *voicemail.Service
 
 	// Optional overrides for tests.
 	Now          func() time.Time
@@ -122,6 +126,10 @@ func (m *Manager) Dispatch(ctx context.Context, ev engine.Event) {
 	case engine.DTMF:
 		m.route(ev.ChannelID, ev)
 	case engine.PlaybackFinished:
+		m.route(ev.ChannelID, ev)
+	case engine.RecordingFinished:
+		m.route(ev.ChannelID, ev)
+	case engine.RecordingFailed:
 		m.route(ev.ChannelID, ev)
 	case engine.Connected:
 		// Events may have been lost while disconnected: let every call

@@ -47,6 +47,9 @@ type TrunkLine struct {
 	Register bool
 }
 
+// Mailbox is the MWI mailbox of an extension number.
+func Mailbox(extension string) string { return extension + "@voipd" }
+
 type Extension struct {
 	Number      string
 	Name        string

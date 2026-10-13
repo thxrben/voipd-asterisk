@@ -61,7 +61,7 @@ func (c *call) inbound() {
 		}
 		c.log.Warn("no route for called number", "line", line.Number)
 		c.timeline("route.none", map[string]any{"line": line.Number})
-		c.noAnswer("hangup", "no_route")
+		c.noAnswer("hangup", nil, "no_route")
 		return
 	}
 
@@ -82,7 +82,7 @@ func (c *call) inbound() {
 	}
 	if len(targets) == 0 {
 		c.timeline("route.no_targets", map[string]any{"group": group.Name})
-		c.noAnswer(group.Fallback, "no_available_extensions")
+		c.noAnswer(group.Fallback, group.FallbackExtension, "no_available_extensions")
 		return
 	}
 
@@ -96,7 +96,7 @@ func (c *call) inbound() {
 	case outCallerGone:
 		c.missed(store.CallCancelled, "caller_hung_up")
 	default:
-		c.noAnswer(group.Fallback, out.String())
+		c.noAnswer(group.Fallback, group.FallbackExtension, out.String())
 	}
 }
 
@@ -106,15 +106,17 @@ func (c *call) answered(b *leg) {
 	c.finish(store.CallAnswered)
 }
 
-// noAnswer applies a ring group's fallback once nobody picked up.
-func (c *call) noAnswer(fallback, why string) {
+// noAnswer applies a ring group's fallback once nobody picked up; box is
+// the mailbox for the "voicemail" fallback.
+func (c *call) noAnswer(fallback string, box *store.Extension, why string) {
 	switch fallback {
 	case "keep_ringing":
 		c.publishMissed(store.CallMissed, why)
 		c.waitForCallerHangup(stealthMaxRing)
 		c.finish(store.CallMissed)
+	case "voicemail":
+		c.toVoicemail(box, why)
 	default:
-		// "voicemail" falls back to hanging up until voicemail exists.
 		c.hangup(c.a, engine.HangupNoAnswer)
 		c.missed(store.CallMissed, why)
 	}

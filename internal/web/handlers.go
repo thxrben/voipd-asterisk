@@ -293,9 +293,18 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		top[kind] = e
 	}
+	boxes, err := s.d.Store.MailboxCounts(ctx)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	newVoicemails := 0
+	for _, b := range boxes {
+		newVoicemails += b.New
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"from": rng.From, "to": rng.To, "bucket_seconds": int(size.Seconds()),
-		"summary": sum, "series": series, "outcomes": outcomes, "top": top,
+		"summary": sum, "series": series, "outcomes": outcomes, "top": top, "voicemail_new": newVoicemails,
 	})
 }
 

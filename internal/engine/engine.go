@@ -25,7 +25,15 @@ type Engine interface {
 	CreateBridge(ctx context.Context) (bridgeID string, err error)
 	AddToBridge(ctx context.Context, bridgeID string, channelIDs ...string) error
 	DestroyBridge(ctx context.Context, bridgeID string) error
-	Play(ctx context.Context, channelID, media string) (playbackID string, err error)
+	// Play plays media (e.g. "sound:voipd/vm-greeting", "recording:vm/10/x")
+	// one after another; PlaybackFinished reports the end of all of them.
+	Play(ctx context.Context, channelID string, media ...string) (playbackID string, err error)
+	StopPlayback(ctx context.Context, playbackID string) error
+	// Record records a channel into the named recording; the result
+	// arrives as RecordingFinished or RecordingFailed.
+	Record(ctx context.Context, channelID string, req RecordRequest) error
+	// SetMWI publishes a mailbox's message counts (message waiting lights).
+	SetMWI(ctx context.Context, mailbox string, newMessages, oldMessages int) error
 	ChannelVar(ctx context.Context, channelID, name string) (string, error)
 	// ChannelExists is used to resync after a reconnect.
 	ChannelExists(ctx context.Context, channelID string) (bool, error)
@@ -116,6 +124,16 @@ type OriginateRequest struct {
 	Originator string
 	// Vars are channel variables set on the new channel (e.g. PJSIP headers).
 	Vars map[string]string
+}
+
+// RecordRequest describes a recording. Name may contain directories
+// ("vm/10/abc"); the file is <recording dir>/<Name>.<Format>.
+type RecordRequest struct {
+	Name        string
+	Format      string // default "wav"
+	MaxDuration time.Duration
+	MaxSilence  time.Duration
+	TerminateOn string // DTMF key that ends the recording, e.g. "#"
 }
 
 // Registration is the state of one outbound registration to a trunk.

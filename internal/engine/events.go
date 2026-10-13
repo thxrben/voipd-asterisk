@@ -72,6 +72,22 @@ type PlaybackFinished struct {
 	ChannelID  string
 }
 
+// RecordingFinished: a recording ended (time limit, silence, terminating
+// key or hangup); Duration has second precision.
+type RecordingFinished struct {
+	Meta
+	Name      string
+	ChannelID string
+	Duration  time.Duration
+}
+
+type RecordingFailed struct {
+	Meta
+	Name      string
+	ChannelID string
+	Cause     string
+}
+
 type RegistrationChanged struct {
 	Meta
 	Registration Registration

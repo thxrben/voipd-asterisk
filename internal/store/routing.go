@@ -20,19 +20,23 @@ type RingGroup struct {
 	Name        string
 	RingTimeout int // seconds
 	Fallback    string
+	// FallbackExtension is whose voicemail takes calls nobody answers
+	// (Fallback "voicemail"); nil if unset or disabled.
+	FallbackExtension *Extension
 	// Members are the enabled extensions of the group (DND included; the
 	// call flow decides how to treat DND).
 	Members []Extension
 }
 
 const extensionCols = `e.id, e.number, e.name, e.enabled, e.sip_username, e.sip_password, e.transport, e.srtp,
-	e.codecs, e.max_contacts, e.clir, e.dnd, COALESCE(e.outbound_number_id, 0), e.owner_subject`
+	e.codecs, e.max_contacts, e.clir, e.dnd, COALESCE(e.outbound_number_id, 0), e.owner_subject, e.voicemail_greeting`
 
 func scanExtension(sc interface{ Scan(...any) error }) (Extension, error) {
 	var e Extension
 	var codecs string
 	err := sc.Scan(&e.ID, &e.Number, &e.Name, &e.Enabled, &e.SIPUsername, &e.SIPPassword,
-		&e.Transport, &e.SRTP, &codecs, &e.MaxContacts, &e.CLIR, &e.DND, &e.OutboundNumberID, &e.OwnerSubject)
+		&e.Transport, &e.SRTP, &codecs, &e.MaxContacts, &e.CLIR, &e.DND, &e.OutboundNumberID, &e.OwnerSubject,
+		&e.VoicemailGreeting)
 	e.Codecs = splitCodecs(codecs)
 	return e, err
 }
@@ -86,12 +90,22 @@ func (s *Store) OutboundLineFor(ctx context.Context, extensionID int64) (Line, e
 // to, or ErrNotFound if the number has no route.
 func (s *Store) RouteForLine(ctx context.Context, trunkNumberID int64) (RingGroup, error) {
 	var g RingGroup
+	var fallbackExt int64
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT g.id, g.name, g.ring_timeout, g.fallback
+		SELECT g.id, g.name, g.ring_timeout, g.fallback, COALESCE(g.fallback_extension_id, 0)
 		FROM did_routes r JOIN ring_groups g ON g.id = r.ring_group_id
-		WHERE r.trunk_number_id = ?`, trunkNumberID).Scan(&g.ID, &g.Name, &g.RingTimeout, &g.Fallback)
+		WHERE r.trunk_number_id = ?`, trunkNumberID).Scan(&g.ID, &g.Name, &g.RingTimeout, &g.Fallback, &fallbackExt)
 	if err != nil {
 		return g, notFound(err)
+	}
+	if fallbackExt != 0 {
+		e, err := scanExtension(s.DB.QueryRowContext(ctx,
+			`SELECT `+extensionCols+` FROM extensions e WHERE e.id = ? AND e.enabled`, fallbackExt))
+		if err == nil {
+			g.FallbackExtension = &e
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return g, err
+		}
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT `+extensionCols+`

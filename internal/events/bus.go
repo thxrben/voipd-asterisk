@@ -21,6 +21,9 @@ const (
 	CallEnded    = "call.ended"  // final event of every call, with status and durations
 
 	ExtensionDND = "extension.dnd" // do not disturb switched: extension, dnd
+
+	VoicemailNew   = "voicemail.new"   // a message was left: id, extension, caller, duration_seconds
+	VoicemailCount = "voicemail.count" // a mailbox's counts changed: extension, new, old
 )
 
 // Event is JSON-friendly so it can be forwarded unchanged.

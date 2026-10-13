@@ -1,0 +1,149 @@
+# German voice prompts for voipd, rendered with Piper TTS when the Asterisk
+# image is built (see Dockerfile). One prompt per line: name|text.
+# Played as sound:voipd/<name>.
+
+# Leaving a message
+vm-greeting|Leider ist gerade niemand erreichbar. Bitte hinterlassen Sie eine Nachricht nach dem Ton.
+vm-thanks|Vielen Dank für Ihre Nachricht. Auf Wiederhören.
+
+# Mailbox menu (*98)
+vm-you-have|Sie haben
+vm-no-messages|Sie haben keine Nachrichten.
+vm-one|eine
+vm-and|und
+vm-new-one|neue Nachricht
+vm-new-many|neue Nachrichten
+vm-old-one|alte Nachricht
+vm-old-many|alte Nachrichten
+vm-main-menu|Drücken Sie die Eins, um Ihre Nachrichten abzuhören, oder die Null, um Ihre persönliche Ansage aufzunehmen.
+vm-main-menu-empty|Drücken Sie die Null, um Ihre persönliche Ansage aufzunehmen.
+vm-message|Nachricht
+vm-from|von
+vm-unknown|einem unbekannten Anrufer
+vm-today|heute
+vm-yesterday|gestern
+vm-at|um
+vm-oclock|Uhr
+vm-message-menu|Drücken Sie die Eins zum Wiederholen, die Zwei für die nächste Nachricht, oder die Sieben zum Löschen.
+vm-deleted|Die Nachricht wurde gelöscht.
+vm-no-more|Keine weiteren Nachrichten.
+vm-greet-record|Bitte sprechen Sie Ihre Ansage nach dem Ton. Drücken Sie anschließend die Rautetaste.
+vm-greet-review|Ihre neue Ansage lautet:
+vm-greet-confirm|Drücken Sie die Eins zum Speichern oder die Zwei zum Verwerfen.
+vm-greet-saved|Ihre Ansage wurde gespeichert.
+vm-greet-discarded|Die Ansage wurde verworfen.
+vm-invalid|Ungültige Eingabe.
+vm-goodbye|Auf Wiederhören.
+code-unavailable|Diese Funktion ist nicht verfügbar.
+
+# Weekdays (Go's time.Weekday order)
+day-0|Sonntag
+day-1|Montag
+day-2|Dienstag
+day-3|Mittwoch
+day-4|Donnerstag
+day-5|Freitag
+day-6|Samstag
+
+# Numbers (n1h: "ein" as in "ein Uhr")
+n1h|ein
+n0|null
+n1|eins
+n2|zwei
+n3|drei
+n4|vier
+n5|fünf
+n6|sechs
+n7|sieben
+n8|acht
+n9|neun
+n10|zehn
+n11|elf
+n12|zwölf
+n13|dreizehn
+n14|vierzehn
+n15|fünfzehn
+n16|sechzehn
+n17|siebzehn
+n18|achtzehn
+n19|neunzehn
+n20|zwanzig
+n21|einundzwanzig
+n22|zweiundzwanzig
+n23|dreiundzwanzig
+n24|vierundzwanzig
+n25|fünfundzwanzig
+n26|sechsundzwanzig
+n27|siebenundzwanzig
+n28|achtundzwanzig
+n29|neunundzwanzig
+n30|dreißig
+n31|einunddreißig
+n32|zweiunddreißig
+n33|dreiunddreißig
+n34|vierunddreißig
+n35|fünfunddreißig
+n36|sechsunddreißig
+n37|siebenunddreißig
+n38|achtunddreißig
+n39|neununddreißig
+n40|vierzig
+n41|einundvierzig
+n42|zweiundvierzig
+n43|dreiundvierzig
+n44|vierundvierzig
+n45|fünfundvierzig
+n46|sechsundvierzig
+n47|siebenundvierzig
+n48|achtundvierzig
+n49|neunundvierzig
+n50|fünfzig
+n51|einundfünfzig
+n52|zweiundfünfzig
+n53|dreiundfünfzig
+n54|vierundfünfzig
+n55|fünfundfünfzig
+n56|sechsundfünfzig
+n57|siebenundfünfzig
+n58|achtundfünfzig
+n59|neunundfünfzig
+n60|sechzig
+n61|einundsechzig
+n62|zweiundsechzig
+n63|dreiundsechzig
+n64|vierundsechzig
+n65|fünfundsechzig
+n66|sechsundsechzig
+n67|siebenundsechzig
+n68|achtundsechzig
+n69|neunundsechzig
+n70|siebzig
+n71|einundsiebzig
+n72|zweiundsiebzig
+n73|dreiundsiebzig
+n74|vierundsiebzig
+n75|fünfundsiebzig
+n76|sechsundsiebzig
+n77|siebenundsiebzig
+n78|achtundsiebzig
+n79|neunundsiebzig
+n80|achtzig
+n81|einundachtzig
+n82|zweiundachtzig
+n83|dreiundachtzig
+n84|vierundachtzig
+n85|fünfundachtzig
+n86|sechsundachtzig
+n87|siebenundachtzig
+n88|achtundachtzig
+n89|neunundachtzig
+n90|neunzig
+n91|einundneunzig
+n92|zweiundneunzig
+n93|dreiundneunzig
+n94|vierundneunzig
+n95|fünfundneunzig
+n96|sechsundneunzig
+n97|siebenundneunzig
+n98|achtundneunzig
+n99|neunundneunzig

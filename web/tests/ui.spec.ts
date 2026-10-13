@@ -507,6 +507,76 @@ test('integrations: MQTT settings', async ({ page }) => {
   await expect(page.getByText('MQTT is off')).toBeVisible()
 })
 
+function wav(seconds: number, rate = 8000, channels = 1): Buffer {
+  const n = seconds * rate * channels
+  const b = Buffer.alloc(44 + n * 2)
+  b.write('RIFF', 0)
+  b.writeUInt32LE(36 + n * 2, 4)
+  b.write('WAVEfmt ', 8)
+  b.writeUInt32LE(16, 16)
+  b.writeUInt16LE(1, 20)
+  b.writeUInt16LE(channels, 22)
+  b.writeUInt32LE(rate, 24)
+  b.writeUInt32LE(rate * 2 * channels, 28)
+  b.writeUInt16LE(2 * channels, 32)
+  b.writeUInt16LE(16, 34)
+  b.write('data', 36)
+  b.writeUInt32LE(n * 2, 40)
+  return b
+}
+
+test('voicemail: own mailbox, play marks heard, delete, greeting upload', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept())
+  await loginAs(page, alice)
+  await page.getByRole('link', { name: 'Voicemail' }).click()
+  const box = page.getByRole('region', { name: 'Mailbox 10' })
+  await expect(box).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Mailbox 11' })).toHaveCount(0) // not alice's
+  await expect(box.locator('header .badge')).toHaveText('2 new')
+  await expect(box.locator('li')).toHaveCount(3)
+
+  // The audio is served to the player.
+  const res = await page.request.get('/api/v1/voicemails/demo-vm-1/audio')
+  expect(res.status()).toBe(200)
+  expect(res.headers()['content-type']).toBe('audio/wav')
+
+  // Playing a message marks it as heard.
+  await box.locator('audio[aria-label="Message from Mom"]').dispatchEvent('play')
+  await expect(box.locator('header .badge')).toHaveText('1 new')
+  await box.locator('li', { hasText: 'Jonas' }).getByRole('button', { name: 'Mark as heard' }).click()
+  await expect(box.locator('header .badge')).toHaveCount(0)
+
+  await box.getByRole('button', { name: 'Delete message from Dentist Dr. Weber' }).click()
+  await expect(box.locator('li')).toHaveCount(2)
+
+  // Greeting: wrong format, then a valid one, then back to standard.
+  const upload = box.getByLabel('Upload greeting for 10')
+  await upload.setInputFiles({ name: 'greeting.wav', mimeType: 'audio/wav', buffer: wav(1, 44100) })
+  await expect(box.getByText('8 kHz or 16 kHz')).toBeVisible()
+  await upload.setInputFiles({ name: 'greeting.wav', mimeType: 'audio/wav', buffer: wav(2, 16000) })
+  await expect(box.getByText('Greeting: personal')).toBeVisible()
+  await expect(box.locator('audio[aria-label="Greeting of 10"]')).toBeVisible()
+  await box.getByRole('button', { name: 'Use standard greeting' }).click()
+  await expect(box.getByText('Greeting: standard')).toBeVisible()
+})
+
+test('voicemail: admins see every mailbox and the dashboard count', async ({ page }) => {
+  await loginAs(page, admin)
+  const dash = await (await page.request.get('/api/v1/stats/dashboard?range=24h')).json()
+  await expect(page.getByRole('link', { name: new RegExp(`${dash.voicemail_new} new voicemail`) })).toBeVisible()
+  await page.getByRole('link', { name: 'Voicemail', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Mailbox 11' })).toContainText('Insurance')
+  await expect(page.getByRole('region', { name: 'Mailbox 12' })).toContainText('No messages.')
+})
+
+test('phone codes page', async ({ page }) => {
+  await loginAs(page, alice)
+  await page.getByRole('link', { name: 'Phone codes' }).click()
+  const row = page.locator('tr', { hasText: '*98' })
+  await expect(row).toContainText('Voicemail')
+  await expect(row).toContainText('7 delete')
+})
+
 test('users cannot open integrations', async ({ page }) => {
   await loginAs(page, alice)
   await expect(page.getByRole('link', { name: 'Integrations' })).toHaveCount(0)

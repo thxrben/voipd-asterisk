@@ -35,6 +35,7 @@ import (
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
+	"voipd/internal/voicemail"
 	"voipd/internal/web"
 	webui "voipd/web"
 )
@@ -99,13 +100,15 @@ func run() error {
 		return fmt.Errorf("load screening lists: %w", err)
 	}
 	syncer := screening.NewSyncer(st, screen, nums, bus, log.With("component", "lists"))
+	vm := voicemail.New(st, eng, bus, cfg.Store.VoicemailDir, log.With("component", "voicemail"))
 	calls := callflow.NewManager(callflow.Deps{
-		Engine:   eng,
-		Store:    st,
-		Numbers:  nums,
-		Screener: screen,
-		Bus:      bus,
-		Log:      log.With("component", "calls"),
+		Engine:    eng,
+		Store:     st,
+		Numbers:   nums,
+		Screener:  screen,
+		Voicemail: vm,
+		Bus:       bus,
+		Log:       log.With("component", "calls"),
 	})
 	sup := trunks.NewSupervisor(eng, bus, st.AddSIPEvent, log.With("component", "trunks"),
 		policy(cfg.Trunks), func() trunks.Load {
@@ -145,7 +148,7 @@ func run() error {
 		Addr: cfg.HTTP.Listen,
 		Handler: web.New(web.Deps{
 			Store: st, Numbers: nums, Config: conf, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
-			Stats: statistics, Screening: screen, Syncer: syncer, Modules: mods, Log: log.With("component", "web"), UI: webui.FS(),
+			Stats: statistics, Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm, Log: log.With("component", "web"), UI: webui.FS(),
 			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -174,7 +177,7 @@ func run() error {
 	go func() { defer wg.Done(); watchNetwork(ctx, cfg, conf, sup, log) }()
 	go func() { defer wg.Done(); watchDNS(ctx, cfg, conf, sup, log) }()
 
-	dispatch(ctx, eng, calls, sup)
+	dispatch(ctx, eng, calls, sup, vm, log)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx) // SSE streams end with the request contexts
@@ -234,7 +237,8 @@ func policy(t config.Trunks) trunks.Policy {
 }
 
 // dispatch fans engine events out to their consumers until ctx is done.
-func dispatch(ctx context.Context, eng engine.Engine, calls *callflow.Manager, sup *trunks.Supervisor) {
+func dispatch(ctx context.Context, eng engine.Engine, calls *callflow.Manager, sup *trunks.Supervisor,
+	vm *voicemail.Service, log *slog.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -246,6 +250,11 @@ func dispatch(ctx context.Context, eng engine.Engine, calls *callflow.Manager, s
 			case engine.Connected:
 				sup.EngineConnected(ctx, now)
 				go sup.Poll(ctx, now)
+				go func() { // message waiting lights after (re)starts
+					if err := vm.PublishAll(ctx); err != nil {
+						log.Warn("publish message waiting state", "err", err)
+					}
+				}()
 			case engine.Disconnected:
 				sup.EngineDisconnected(ctx, now, ev.Err)
 			case engine.RegistrationChanged:

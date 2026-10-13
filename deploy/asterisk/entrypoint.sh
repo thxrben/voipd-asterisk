@@ -46,6 +46,14 @@ while [ ! -s /etc/asterisk/voipd/pjsip_voipd.conf ] && [ "$wait" -gt 0 ]; do
     wait=$((wait - 1))
 done
 [ -s /etc/asterisk/voipd/pjsip_voipd.conf ] || echo "WARNING: starting without voipd config; restart Asterisk once voipd runs"
-chown -R asterisk:asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk
+chown -R asterisk:asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk
+find /var/spool/asterisk -path /var/spool/asterisk/recording -prune -o -exec chown asterisk:asterisk {} +
+
+# Recordings (voicemail, greetings) live in a volume shared with voipd: it
+# lists, serves and deletes them, Asterisk records into and plays from it.
+# voipd owns the directory; files Asterisk writes get the asterisk group.
+mkdir -p /var/spool/asterisk/recording
+chown "$VOIPD_UID":asterisk /var/spool/asterisk/recording
+chmod 2775 /var/spool/asterisk/recording
 
 exec "$@"

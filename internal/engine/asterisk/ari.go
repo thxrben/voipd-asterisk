@@ -119,15 +119,24 @@ type ariChannel struct {
 }
 
 type ariEvent struct {
-	Type      string       `json:"type"`
-	Timestamp string       `json:"timestamp"`
-	Args      []string     `json:"args"`
-	Channel   *ariChannel  `json:"channel"`
-	Cause     int          `json:"cause"`
-	CauseTxt  string       `json:"cause_txt"`
-	Digit     string       `json:"digit"`
-	Duration  int          `json:"duration_ms"`
-	Playback  *ariPlayback `json:"playback"`
+	Type      string        `json:"type"`
+	Timestamp string        `json:"timestamp"`
+	Args      []string      `json:"args"`
+	Channel   *ariChannel   `json:"channel"`
+	Cause     int           `json:"cause"`
+	CauseTxt  string        `json:"cause_txt"`
+	Digit     string        `json:"digit"`
+	Duration  int           `json:"duration_ms"`
+	Playback  *ariPlayback  `json:"playback"`
+	Recording *ariRecording `json:"recording"`
+}
+
+type ariRecording struct {
+	Name      string `json:"name"`
+	TargetURI string `json:"target_uri"`
+	State     string `json:"state"`
+	Duration  int    `json:"duration"` // seconds
+	Cause     string `json:"cause"`
 }
 
 type ariPlayback struct {

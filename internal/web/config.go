@@ -404,6 +404,9 @@ func (s *Server) deleteExtension(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil {
 		s.recordAudit(r, "extension.delete", e.Number, nil)
+		if s.d.Voicemail != nil {
+			s.d.Voicemail.RemoveMailbox(e.Number)
+		}
 	}
 	s.writeResult(w, r, err, http.StatusOK, nil)
 }

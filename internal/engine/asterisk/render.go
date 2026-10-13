@@ -251,7 +251,10 @@ func renderExtension(w *writer, e engine.Extension) {
 		"max_contacts", strconv.Itoa(maxContacts),
 		"remove_existing", "yes",
 		"remove_unavailable", "yes",
-		"qualify_frequency", strconv.Itoa(extQualifyFreq))
+		"qualify_frequency", strconv.Itoa(extQualifyFreq),
+		// Message waiting light: voipd publishes the counts (SetMWI);
+		// for phones that subscribe to MWI.
+		"mailboxes", engine.Mailbox(e.Number))
 	ep := []string{
 		"type", "endpoint",
 		"context", "from-internal",
@@ -267,6 +270,10 @@ func renderExtension(w *writer, e engine.Extension) {
 		"dtmf_mode", "rfc4733",
 		"rtp_ipv6", "yes",
 		"send_pai", "yes",
+		// Unsolicited MWI NOTIFYs (endpoint), unless the phone subscribes
+		// (aor mailboxes above).
+		"mailboxes", engine.Mailbox(e.Number),
+		"mwi_subscribe_replaces_unsolicited", "yes",
 	}
 	if e.SRTP {
 		ep = append(ep, "media_encryption", "sdes")

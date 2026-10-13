@@ -15,6 +15,7 @@ import (
 	"voipd/internal/events"
 	"voipd/internal/numbers"
 	"voipd/internal/store"
+	"voipd/internal/voicemail"
 )
 
 // fakeEngine records actions as strings like "ring A" or
@@ -25,6 +26,7 @@ type fakeEngine struct {
 
 	mu         sync.Mutex
 	originates map[string]engine.OriginateRequest // by endpoint
+	playbacks  int
 }
 
 func newFakeEngine() *fakeEngine {
@@ -70,7 +72,26 @@ func (f *fakeEngine) DestroyBridge(_ context.Context, b string) error {
 	f.record("bridge destroy %s", b)
 	return nil
 }
-func (f *fakeEngine) Play(context.Context, string, string) (string, error) { return "", nil }
+func (f *fakeEngine) Play(_ context.Context, id string, media ...string) (string, error) {
+	f.mu.Lock()
+	f.playbacks++
+	pb := fmt.Sprintf("pb%d", f.playbacks)
+	f.mu.Unlock()
+	f.record("play %s %s", id, strings.Join(media, ","))
+	return pb, nil
+}
+func (f *fakeEngine) StopPlayback(_ context.Context, pb string) error {
+	f.record("stop %s", pb)
+	return nil
+}
+func (f *fakeEngine) Record(_ context.Context, id string, r engine.RecordRequest) error {
+	f.record("record %s %s", id, r.Name)
+	return nil
+}
+func (f *fakeEngine) SetMWI(_ context.Context, mailbox string, n, o int) error {
+	f.record("mwi %s %d/%d", mailbox, n, o)
+	return nil
+}
 func (f *fakeEngine) ChannelVar(_ context.Context, id, name string) (string, error) {
 	if name == "CHANNEL(rtcp,all)" {
 		return "ssrc=1;themssrc=2;lp=5;rxjitter=0.002000;rxcount=995;txjitter=0.001;txcount=1000;rlp=1;rtt=0.040000", nil
@@ -115,6 +136,18 @@ func (f *fakeEngine) expect(t *testing.T, want string) {
 	}
 }
 
+// next returns the next action.
+func (f *fakeEngine) next(t *testing.T) string {
+	t.Helper()
+	select {
+	case got := <-f.actions:
+		return got
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for an action")
+	}
+	return ""
+}
+
 // expectNone asserts no action happens for a short while.
 func (f *fakeEngine) expectNone(t *testing.T, d time.Duration) {
 	t.Helper()
@@ -154,6 +187,8 @@ type env struct {
 	// verdict, when set, is returned by the screener instead.
 	verdict *Verdict
 	m       *Manager
+	vm      *voicemail.Service
+	vmDir   string
 }
 
 // newEnv seeds: trunk "telekom" with DID +492011111111 (line id 1) routed to
@@ -182,9 +217,10 @@ func newEnv(t *testing.T, ringTimeout int, fallback string) *env {
 	bus := events.NewBus(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	sub, unsub := bus.Subscribe("call.", 64)
 
-	e := &env{eng: newFakeEngine(), st: st, bus: sub}
+	e := &env{eng: newFakeEngine(), st: st, bus: sub, vmDir: t.TempDir()}
+	e.vm = voicemail.New(st, e.eng, bus, e.vmDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	e.m = NewManager(Deps{
-		Engine: e.eng, Store: st, Numbers: z, Bus: bus,
+		Engine: e.eng, Store: st, Numbers: z, Bus: bus, Voicemail: e.vm,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Screener: ScreenerFunc(func(context.Context, numbers.Number, store.Line) Verdict {
 			if e.verdict != nil {
@@ -490,7 +526,7 @@ func TestOutboundBusyAndInvalid(t *testing.T) {
 	})
 	t.Run("invalid", func(t *testing.T) {
 		e := newEnv(t, 30, "hangup")
-		e.fromPhone("A", "10", "*99abc")
+		e.fromPhone("A", "10", "12ab")
 		e.eng.expect(t, "hangup A unallocated")
 		e.eng.hangup("A", engine.CauseNormal)
 		e.events(t)

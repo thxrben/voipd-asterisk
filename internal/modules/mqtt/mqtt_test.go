@@ -34,6 +34,8 @@ type broker struct {
 	addr string
 	srv  *mochi.Server
 
+	timeout time.Duration // for wait
+
 	mu   sync.Mutex
 	last map[string]string // topic -> last payload
 	seen []string          // topics in order
@@ -50,7 +52,7 @@ func freeAddr(t *testing.T) string {
 
 func startBroker(t *testing.T, addr string) *broker {
 	t.Helper()
-	b := &broker{t: t, addr: addr, last: map[string]string{}}
+	b := &broker{t: t, addr: addr, last: map[string]string{}, timeout: 5 * time.Second}
 	b.srv = mochi.New(&mochi.Options{InlineClient: true, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	b.srv.AddHook(new(auth.AllowHook), nil)
 	if err := b.srv.AddListener(listeners.NewTCP(listeners.Config{ID: "t", Address: addr})); err != nil {
@@ -88,7 +90,7 @@ func (b *broker) get(topic string) (string, bool) {
 
 func (b *broker) wait(topic, want string) {
 	b.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(b.timeout)
 	for {
 		v, ok := b.get(topic)
 		if ok && (v == want || want == "*") {
@@ -337,6 +339,7 @@ func TestReconnectsAfterBrokerRestart(t *testing.T) {
 	b.close()
 
 	b2 := startBroker(t, addr)
+	b2.timeout = 20 * time.Second     // reconnect backoff, slower on a busy machine
 	b2.wait("voipd/status", "online") // republished after reconnecting
 	b2.wait("voipd/extension/10/registered", "ON")
 }

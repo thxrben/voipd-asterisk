@@ -20,12 +20,13 @@ COPY . .
 COPY --from=ui /web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/voipd ./cmd/voipd \
-    && mkdir -p /out/data /out/generated
+    && mkdir -p /out/data/voicemail /out/generated
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/voipd /usr/local/bin/voipd
 # A fresh named volume copies this directory's ownership, so voipd can
-# create its database without running as root.
+# create its database without running as root (and use the voicemail
+# volume mounted below it).
 COPY --from=build --chown=65532:65532 /out/data /var/lib/voipd
 # Same for the generated Asterisk config: voipd starts first and must be
 # able to write it into a fresh shared volume.

@@ -134,7 +134,15 @@ type ownership struct {
 }
 
 func (o ownership) allows(ev events.Event) bool {
-	if ev.CallID == "" || o.numbers == nil {
+	if o.numbers == nil {
+		return false
+	}
+	// Mailbox and DND events concern one extension.
+	if strings.HasPrefix(ev.Type, "voicemail.") || ev.Type == events.ExtensionDND {
+		ext, _ := ev.Data["extension"].(string)
+		return o.numbers[ext]
+	}
+	if ev.CallID == "" {
 		return false // trunk/engine events are for admins
 	}
 	if o.calls[ev.CallID] {

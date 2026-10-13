@@ -26,6 +26,7 @@ import (
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
+	"voipd/internal/voicemail"
 )
 
 // EngineStatus is the part of the engine the UI reads.
@@ -63,6 +64,7 @@ type Deps struct {
 	Screening      *screening.Engine
 	Syncer         *screening.Syncer
 	Modules        *modules.Manager
+	Voicemail      *voicemail.Service
 	Log            *slog.Logger
 	UI             fs.FS // built web UI (index.html + assets); nil = none
 	DataDir        string
@@ -104,6 +106,15 @@ func New(d Deps) http.Handler {
 		r.Get("/calls/{id}", s.getCall)
 		r.Get("/events", s.events)
 		r.Put("/extensions/{id}/dnd", s.setDND) // admins and the owner
+		r.Get("/codes", s.phoneCodes)
+		// Voicemail: admins see every mailbox, users their own.
+		r.Get("/voicemails", s.listVoicemails)
+		r.Get("/voicemails/{id}/audio", s.voicemailAudio)
+		r.Put("/voicemails/{id}", s.updateVoicemail)
+		r.Delete("/voicemails/{id}", s.deleteVoicemail)
+		r.Put("/extensions/{id}/greeting", s.uploadGreeting)
+		r.Delete("/extensions/{id}/greeting", s.deleteGreeting)
+		r.Get("/extensions/{id}/greeting/audio", s.greetingAudio)
 
 		r.Group(func(r chi.Router) {
 			r.Use(adminOnly)

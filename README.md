@@ -25,7 +25,8 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | Telephony configuration in the UI: lines (Telekom preset), numbers, extensions with phone credentials, ring groups, do not disturb | done |
 | Call blocking: block/allow lists, number ranges, PhoneBlock/CardDAV sync, bulk import, contacts, pause, anonymous blocking | done |
 | Integrations: MQTT with Home Assistant discovery, signed webhooks, e-mail notifications | done |
-| Voicemail, directory, backups | in progress |
+| Voicemail: German prompts, message waiting light, *98 phone menu, web player, personal greetings | done |
+| Directory, backups | in progress |
 
 ## Run
 
@@ -57,6 +58,7 @@ database.
 | `VOIPD_PUBLIC_IP_URL` | … or a URL returning it (e.g. `https://api.ipify.org`), checked periodically |
 | `VOIPD_DNS_SERVER` | `host:port` resolver for voipd's registrar DNS checks |
 | `VOIPD_DB_PATH`, `VOIPD_LOG_LEVEL` | database path, `debug`/`info`/`warn` |
+| `VOIPD_VOICEMAIL_DIR` | voicemail directory, shared with Asterisk's recording directory (default `/var/lib/voipd/voicemail`) |
 | `VOIPD_HTTP_LISTEN`, `VOIPD_PUBLIC_URL` | web UI listen address (default `[::]:8080`) and the URL users open |
 | `VOIPD_OIDC_ISSUER`, `…_CLIENT_ID`, `…_CLIENT_SECRET` | authentik/OIDC login; redirect URI is `<public url>/auth/callback` |
 | `VOIPD_ADMIN_GROUP`, `VOIPD_USER_GROUP` | groups granting admin / user access (default `voipd-admins` / `voipd-users`) |
@@ -111,6 +113,26 @@ Other sources: any CardDAV address book (also for contacts, e.g. Nextcloud),
 a URL with a CSV/text/vCard list downloaded periodically, or a one-off
 import of a file (checked first, then imported as its own list so it can be
 removed again as a whole).
+
+## Voicemail
+
+A ring group whose fallback is *Voicemail* (Telephony → Ring groups) takes a
+message when nobody answers: the caller hears the mailbox's personal greeting
+(or the standard one) and a beep; `#`, 5 s of silence, hanging up or 3 minutes
+end the message. Phones of the extension get the message waiting light.
+
+- **On the phone:** dial `*98` for your own mailbox (no PIN: the phone is
+  logged in). `1` listen, `0` record your greeting; while listening `1`
+  repeat, `2`/`#` next, `7` delete. All codes are listed under *Phone codes*
+  in the web UI.
+- **In the web UI** (*Voicemail*): play, download, mark as heard, delete;
+  upload a greeting (WAV, mono, 16 bit, 8 or 16 kHz, up to 2 minutes).
+  Users see the mailboxes of their own extensions, admins all.
+
+The German prompts are generated once with [Piper](https://github.com/rhasspy/piper)
+(voice "Thorsten") when the Asterisk image is built; texts are in
+`deploy/asterisk/prompts/de.txt`. Messages and greetings live in the
+`voicemail` volume shared by both containers.
 
 ## Integrations
 
@@ -200,6 +222,7 @@ test/e2e/chaos.sh       # trunk outages, auth rejection, DNS failure, carrier IP
 test/e2e/ui.sh          # web UI in Chrome (Playwright) with demo data and a fake OIDC provider (~30 s)
 test/e2e/integrations.sh # Mosquitto, mailpit, webhook receiver: events, e-mail and MQTT commands
                         # with real calls (~1.5 min)
+test/e2e/voicemail.sh   # leave a message, message waiting light, *98 listen and delete (~1 min)
 ```
 
 UI development: `go run ./test/devseed -db /tmp/demo.db` creates demo data;

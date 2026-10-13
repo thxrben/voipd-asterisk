@@ -8,8 +8,9 @@
   interface Props {
     status: Status | null
     summary: Summary | null
+    voicemailNew?: number
   }
-  let { status, summary }: Props = $props()
+  let { status, summary, voicemailNew = 0 }: Props = $props()
 
   const active = $derived(live.status?.active_calls.length ?? status?.active_calls ?? 0)
   const trunksUp = $derived(live.status?.trunks_up ?? status?.trunks_up ?? 0)
@@ -28,6 +29,10 @@
   <a class="item" href="/calls?status=missed,cancelled&direction=inbound" onclick={link}>
     <span class="dot {summary?.missed ? 'warn' : ''}"></span>
     <span><b class="num">{num(summary?.missed)}</b> missed</span>
+  </a>
+  <a class="item" href="/voicemail" onclick={link}>
+    <span class="dot {voicemailNew > 0 ? 'warn' : ''}"></span>
+    <span><b class="num">{voicemailNew}</b> new {voicemailNew === 1 ? 'voicemail' : 'voicemails'}</span>
   </a>
   <a class="item" href="/status" onclick={link}>
     <span class="dot {!engineUp ? 'bad' : trunksUp === trunksTotal ? 'good' : 'bad'}"></span>
@@ -52,7 +57,7 @@
 <style>
   .strip {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 1rem;
   }
   .item {

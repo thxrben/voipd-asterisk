@@ -29,6 +29,9 @@ func (c *call) fromPhone() {
 	}
 
 	dialed := c.ch.Dialed
+	if c.phoneCode(from, dialed) {
+		return
+	}
 	ctx, cancel = c.actx()
 	to, err := c.d.Store.ExtensionByNumber(ctx, dialed)
 	cancel()

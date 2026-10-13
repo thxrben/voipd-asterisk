@@ -60,6 +60,8 @@ func TestRenderTelekom(t *testing.T) {
 		`callerid = "Kitchen" <10>`,
 		"context = from-internal",
 		"identify_by = username,auth_username",
+		"mailboxes = 10@voipd",
+		"mwi_subscribe_replaces_unsolicited = yes",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered config missing %q", want)

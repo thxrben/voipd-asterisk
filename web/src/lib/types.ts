@@ -281,7 +281,7 @@ export interface ScreeningSettings {
 export interface ListSource {
   id: number
   name: string
-  kind: 'manual' | 'file' | 'url' | 'carddav'
+  kind: 'manual' | 'file' | 'url' | 'carddav' | 'phoneblock'
   target: ListTarget
   url: string
   username: string
@@ -293,9 +293,16 @@ export interface ListSource {
   last_status: '' | 'ok' | 'failed'
   last_error: string
   failures: number
+  /** PhoneBlock: blocklist version of the last sync ('' = next sync downloads the full list). */
+  cursor: string
+  /** PhoneBlock: minimum votes, 0 = the PhoneBlock account's setting. */
+  min_votes: number
   entries: number
   cards: number
 }
+
+/** Sources that are downloaded periodically. */
+export const syncedKinds: ListSource['kind'][] = ['url', 'carddav', 'phoneblock']
 
 export interface Screening {
   settings: ScreeningSettings

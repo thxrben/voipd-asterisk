@@ -10,6 +10,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d -t voipd-ui.XXXX)
 UI_PORT=${UI_PORT:-18082}
 IDP_PORT=${IDP_PORT:-18090}
+PB_PORT=${PB_PORT:-18097}
 PIDS=()
 cleanup() {
 	for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
@@ -20,13 +21,16 @@ trap cleanup EXIT
 
 echo "=== build"
 (cd "$ROOT/web" && npm run build --silent)
-(cd "$ROOT" && go build -o "$WORK/voipd" ./cmd/voipd && go build -o "$WORK/oidcfake" ./test/oidcfake)
+(cd "$ROOT" && go build -o "$WORK/voipd" ./cmd/voipd && go build -o "$WORK/oidcfake" ./test/oidcfake &&
+	go build -o "$WORK/phoneblockfake" ./test/phoneblockfake)
 
 echo "=== seed demo data"
 (cd "$ROOT" && go run ./test/devseed -db "$WORK/voipd.db" -days 30 -owner oidc:alice)
 
 echo "=== start fake IdP and voipd"
 "$WORK/oidcfake" -listen "127.0.0.1:$IDP_PORT" -issuer "http://127.0.0.1:$IDP_PORT" >"$WORK/idp.log" 2>&1 &
+PIDS+=($!)
+"$WORK/phoneblockfake" -listen "127.0.0.1:$PB_PORT" -token pb-key -n 2000 -tel +4917099990000 >"$WORK/pb.log" 2>&1 &
 PIDS+=($!)
 VOIPD_ARI_PASSWORD=x VOIPD_AMI_PASSWORD=x VOIPD_DB_PATH="$WORK/voipd.db" VOIPD_GENERATED_DIR="$WORK/gen" \
 VOIPD_HTTP_LISTEN="127.0.0.1:$UI_PORT" VOIPD_PUBLIC_URL="http://127.0.0.1:$UI_PORT" VOIPD_AREA_CODE=201 \
@@ -40,4 +44,4 @@ done
 
 echo "=== playwright"
 cd "$ROOT/web"
-BASE_URL="http://127.0.0.1:$UI_PORT" IDP_URL="http://127.0.0.1:$IDP_PORT" npx playwright test
+BASE_URL="http://127.0.0.1:$UI_PORT" IDP_URL="http://127.0.0.1:$IDP_PORT" PB_URL="http://127.0.0.1:$PB_PORT" npx playwright test

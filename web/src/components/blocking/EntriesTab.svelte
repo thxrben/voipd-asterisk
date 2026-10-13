@@ -7,7 +7,7 @@
   import { router } from '../../lib/router.svelte'
   import { emptySave, runSave } from '../../lib/save'
   import { toast } from '../../lib/toast.svelte'
-  import type { ListEntry, ListSource } from '../../lib/types'
+  import { syncedKinds, type ListEntry, type ListSource } from '../../lib/types'
   import Modal from '../Modal.svelte'
   import Field from '../Field.svelte'
 
@@ -19,7 +19,7 @@
 
   const q = $derived(router.query)
   const listSources = $derived(sources.filter((s) => s.target !== 'contacts'))
-  const synced = $derived(new Set(sources.filter((s) => s.kind === 'url' || s.kind === 'carddav').map((s) => s.id)))
+  const synced = $derived(new Set(sources.filter((s) => syncedKinds.includes(s.kind)).map((s) => s.id)))
 
   let entries = $state<ListEntry[]>([])
   let total = $state(0)

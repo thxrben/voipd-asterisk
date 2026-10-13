@@ -16,10 +16,11 @@ const (
 	TargetAllow    = "allow"
 	TargetContacts = "contacts"
 
-	KindManual  = "manual"
-	KindFile    = "file"
-	KindURL     = "url"
-	KindCardDAV = "carddav"
+	KindManual     = "manual"
+	KindFile       = "file"
+	KindURL        = "url"
+	KindCardDAV    = "carddav"
+	KindPhoneBlock = "phoneblock" // PhoneBlock REST API (full list, then changes)
 
 	// The built-in manual sources (00004_screening.sql).
 	ManualBlockSource    int64 = 1
@@ -53,20 +54,23 @@ type ListSource struct {
 	LastStatus  string     `json:"last_status"`
 	LastError   string     `json:"last_error"`
 	Failures    int        `json:"failures"`
+	Cursor      string     `json:"cursor"`    // PhoneBlock: blocklist version of the last sync
+	MinVotes    int        `json:"min_votes"` // PhoneBlock: 0 = account setting
 	Entries     int        `json:"entries"`
-	Cards       int        `json:"cards"`
+	Cards       int        `json:"cards"` // vCards, or numbers in the PhoneBlock mirror
 }
 
 const sourceCols = `s.id, s.name, s.kind, s.target, s.url, s.username, s.password, s.interval_min, s.enabled,
-	s.last_sync_at, s.last_status, s.last_error, s.failures,
+	s.last_sync_at, s.last_status, s.last_error, s.failures, s.cursor, s.min_votes,
 	(SELECT count(*) FROM list_entries e WHERE e.source_id = s.id),
-	(SELECT count(*) FROM cards c WHERE c.source_id = s.id)`
+	(SELECT count(*) FROM cards c WHERE c.source_id = s.id) +
+	(SELECT count(*) FROM phoneblock_numbers p WHERE p.source_id = s.id)`
 
 func scanSource(sc interface{ Scan(...any) error }) (ListSource, error) {
 	var s ListSource
 	var last sql.NullInt64
 	err := sc.Scan(&s.ID, &s.Name, &s.Kind, &s.Target, &s.URL, &s.Username, &s.Password, &s.IntervalMin, &s.Enabled,
-		&last, &s.LastStatus, &s.LastError, &s.Failures, &s.Entries, &s.Cards)
+		&last, &s.LastStatus, &s.LastError, &s.Failures, &s.Cursor, &s.MinVotes, &s.Entries, &s.Cards)
 	s.LastSyncAt = timePtr(last)
 	s.PasswordSet = s.Password != ""
 	return s, err
@@ -99,9 +103,9 @@ func (s *Store) ListSource(ctx context.Context, id int64) (ListSource, error) {
 
 func (s *Store) CreateListSource(ctx context.Context, src ListSource) (int64, error) {
 	res, err := s.DB.ExecContext(ctx, `
-		INSERT INTO list_sources(name, kind, target, url, username, password, interval_min, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		src.Name, src.Kind, src.Target, src.URL, src.Username, src.Password, src.IntervalMin, src.Enabled)
+		INSERT INTO list_sources(name, kind, target, url, username, password, interval_min, enabled, min_votes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		src.Name, src.Kind, src.Target, src.URL, src.Username, src.Password, src.IntervalMin, src.Enabled, src.MinVotes)
 	if err != nil {
 		return 0, constraintErr(err)
 	}
@@ -110,6 +114,7 @@ func (s *Store) CreateListSource(ctx context.Context, src ListSource) (int64, er
 
 // UpdateListSource changes a source's settings (not its kind or target).
 // A changed URL or login forgets the sync state so the next sync is full.
+// min_votes needs no new download (PhoneBlock entries are re-derived).
 func (s *Store) UpdateListSource(ctx context.Context, src ListSource, setPassword bool) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		var oldURL, oldUser string
@@ -121,14 +126,14 @@ func (s *Store) UpdateListSource(ctx context.Context, src ListSource, setPasswor
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE list_sources SET name = ?, url = ?, username = ?, interval_min = ?, enabled = ?,
+			UPDATE list_sources SET name = ?, url = ?, username = ?, interval_min = ?, enabled = ?, min_votes = ?,
 			       password = CASE WHEN ? THEN ? ELSE password END
 			WHERE id = ?`,
-			src.Name, src.URL, src.Username, src.IntervalMin, src.Enabled, setPassword, src.Password, src.ID); err != nil {
+			src.Name, src.URL, src.Username, src.IntervalMin, src.Enabled, src.MinVotes, setPassword, src.Password, src.ID); err != nil {
 			return err
 		}
 		if oldURL != src.URL || oldUser != src.Username || setPassword {
-			_, err := tx.ExecContext(ctx, `UPDATE list_sources SET failures = 0, last_sync_at = NULL WHERE id = ?`, src.ID)
+			_, err := tx.ExecContext(ctx, `UPDATE list_sources SET failures = 0, last_sync_at = NULL, cursor = '' WHERE id = ?`, src.ID)
 			return err
 		}
 		return nil
@@ -326,57 +331,64 @@ func (s *Store) AddEntries(ctx context.Context, sourceID int64, entries []NewEnt
 // set, keeping hit counters of entries that stay.
 func (s *Store) ReplaceEntries(ctx context.Context, sourceID int64, entries []NewEntry) (added, removed int, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		want := make(map[string]string, len(entries))
-		for _, e := range entries {
-			want[e.Pattern] = e.Label
-		}
-		rows, err := tx.QueryContext(ctx, `SELECT id, pattern, label FROM list_entries WHERE source_id = ? AND card_id IS NULL`, sourceID)
-		if err != nil {
-			return err
-		}
-		type row struct {
-			id             int64
-			pattern, label string
-		}
-		var have []row
-		for rows.Next() {
-			var r row
-			if err := rows.Scan(&r.id, &r.pattern, &r.label); err != nil {
-				rows.Close()
-				return err
-			}
-			have = append(have, r)
-		}
-		rows.Close()
-		for _, r := range have {
-			label, ok := want[r.pattern]
-			switch {
-			case !ok:
-				if _, err := tx.ExecContext(ctx, `DELETE FROM list_entries WHERE id = ?`, r.id); err != nil {
-					return err
-				}
-				removed++
-			case label != r.label:
-				if _, err := tx.ExecContext(ctx, `UPDATE list_entries SET label = ? WHERE id = ?`, label, r.id); err != nil {
-					return err
-				}
-			}
-			delete(want, r.pattern)
-		}
-		st, err := tx.PrepareContext(ctx, `INSERT INTO list_entries(source_id, pattern, label) VALUES (?, ?, ?)`)
-		if err != nil {
-			return err
-		}
-		defer st.Close()
-		for p, l := range want {
-			if _, err := st.ExecContext(ctx, sourceID, p, l); err != nil {
-				return err
-			}
-			added++
-		}
-		return nil
+		added, removed, err = replaceEntriesTx(ctx, tx, sourceID, entries)
+		return err
 	})
 	return added, removed, err
+}
+
+// replaceEntriesTx makes a source's loose entries equal to entries,
+// keeping the IDs (and hit counters) of entries that stay.
+func replaceEntriesTx(ctx context.Context, tx *sql.Tx, sourceID int64, entries []NewEntry) (added, removed int, err error) {
+	want := make(map[string]string, len(entries))
+	for _, e := range entries {
+		want[e.Pattern] = e.Label
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, pattern, label FROM list_entries WHERE source_id = ? AND card_id IS NULL`, sourceID)
+	if err != nil {
+		return 0, 0, err
+	}
+	type row struct {
+		id             int64
+		pattern, label string
+	}
+	var have []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.pattern, &r.label); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		have = append(have, r)
+	}
+	rows.Close()
+	for _, r := range have {
+		label, ok := want[r.pattern]
+		switch {
+		case !ok:
+			if _, err := tx.ExecContext(ctx, `DELETE FROM list_entries WHERE id = ?`, r.id); err != nil {
+				return 0, 0, err
+			}
+			removed++
+		case label != r.label:
+			if _, err := tx.ExecContext(ctx, `UPDATE list_entries SET label = ? WHERE id = ?`, label, r.id); err != nil {
+				return 0, 0, err
+			}
+		}
+		delete(want, r.pattern)
+	}
+	st, err := tx.PrepareContext(ctx, `INSERT INTO list_entries(source_id, pattern, label) VALUES (?, ?, ?)`)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer st.Close()
+	for p, l := range want {
+		if _, err := st.ExecContext(ctx, sourceID, p, l); err != nil {
+			return 0, 0, err
+		}
+		added++
+	}
+	return added, removed, nil
 }
 
 func (s *Store) DeleteEntry(ctx context.Context, id int64) error {

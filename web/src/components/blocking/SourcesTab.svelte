@@ -11,7 +11,7 @@
   import { link } from '../../lib/router.svelte'
   import { emptySave, runSave } from '../../lib/save'
   import { toast } from '../../lib/toast.svelte'
-  import type { ListSource, ListTarget } from '../../lib/types'
+  import { syncedKinds, type ListSource, type ListTarget } from '../../lib/types'
   import Modal from '../Modal.svelte'
   import Field from '../Field.svelte'
 
@@ -25,8 +25,13 @@
 
   const targetLabel: Record<ListTarget, string> = { block: 'Blocklists', allow: 'Allowlists', contacts: 'Address books' }
   const kindLabel: Record<ListSource['kind'], string> = {
-    manual: 'managed here', file: 'imported file', url: 'download', carddav: 'CardDAV',
+    manual: 'managed here', file: 'imported file', url: 'download', carddav: 'CardDAV', phoneblock: 'PhoneBlock API',
   }
+  const PHONEBLOCK_API = 'https://phoneblock.net/phoneblock/api'
+  const voteChoices = [
+    [0, 'as in my PhoneBlock account'], [2, '2 votes'], [4, '4 votes'], [10, '10 votes'], [20, '20 votes'],
+    [50, '50 votes'], [100, '100 votes'],
+  ] as const
   const groups = $derived(targets.map((t) => ({ target: t, items: sources.filter((s) => s.target === t) })))
 
   // Sources with a running sync (cleared by the list.sync_* event).
@@ -81,18 +86,29 @@
       : {
           id: 0, name: '', kind: 'carddav', target: targets[0] ?? 'block', url: '', username: '', password: '',
           password_set: false, interval_min: 360, enabled: true, last_sync_at: null, last_status: '', last_error: '',
-          failures: 0, entries: 0, cards: 0,
+          failures: 0, cursor: '', min_votes: 0, entries: 0, cards: 0,
         }
+    advanced = !!s && s.kind === 'phoneblock' && s.url !== PHONEBLOCK_API
     save = emptySave()
   }
+
+  let advanced = $state(false)
 
   function phoneBlock() {
     if (!src) return
     Object.assign(src, {
-      name: src.name || 'PhoneBlock', kind: 'carddav', target: 'block', interval_min: 360,
-      url: 'https://phoneblock.net/phoneblock/contacts/',
+      name: src.name || 'PhoneBlock', kind: 'phoneblock', target: 'block', interval_min: 1440, url: '', username: '',
     })
   }
+
+  function setKind(kind: 'carddav' | 'url') {
+    if (!src) return
+    if (src.kind === 'phoneblock') Object.assign(src, { url: '', interval_min: 360 })
+    src.kind = kind
+  }
+
+  // A CardDAV source pointing at PhoneBlock may only see part of the list.
+  const phoneBlockDAV = (s: ListSource) => s.kind === 'carddav' && s.url.includes('phoneblock.net')
 
   async function submit(e: SubmitEvent) {
     e.preventDefault()
@@ -128,7 +144,7 @@
           <h2>{s.name}</h2>
           <span class="badge">{kindLabel[s.kind]}</span>
           <div class="actions">
-            {#if s.kind === 'url' || s.kind === 'carddav'}
+            {#if syncedKinds.includes(s.kind)}
               <button onclick={() => sync(s)} disabled={busy} aria-label="Sync {s.name} now" title="Sync now">
                 <RefreshCw size={15} class={busy ? 'spin' : ''} />
               </button>
@@ -142,9 +158,9 @@
         <div class="body info">
           <span class="count">
             <a href="/blocking?tab=numbers&source={s.id}" onclick={link}><b>{s.entries.toLocaleString()}</b> {s.entries === 1 ? 'number' : 'numbers'}</a>
-            {#if s.cards}<span class="muted">from {s.cards.toLocaleString()} entries</span>{/if}
+            {#if s.cards && s.kind !== 'phoneblock'}<span class="muted">from {s.cards.toLocaleString()} entries</span>{/if}
           </span>
-          {#if s.kind === 'url' || s.kind === 'carddav'}
+          {#if syncedKinds.includes(s.kind)}
             <span class="sync">
               {#if busy}
                 <span class="dot warn"></span> syncing…
@@ -158,7 +174,21 @@
               <span class="muted">· every {intervalLabel(s.interval_min)}</span>
             </span>
             {#if s.last_status === 'failed' && !busy}<p class="error-box small">{s.last_error}</p>{/if}
-            <span class="url mono muted" title={s.url}>{s.url}</span>
+            {#if s.kind === 'phoneblock'}
+              <span class="muted small">
+                {s.cards.toLocaleString()} numbers in the PhoneBlock list ·
+                {s.min_votes ? `blocked from ${s.min_votes} votes` : 'threshold from your PhoneBlock account'}
+                {#if s.cursor} · version {s.cursor}{/if}
+              </span>
+            {:else}
+              <span class="url mono muted" title={s.url}>{s.url}</span>
+            {/if}
+            {#if phoneBlockDAV(s)}
+              <p class="hint small">
+                PhoneBlock's address book may only contain part of the blocklist. Add a list with the <b>PhoneBlock</b>
+                preset to sync the complete list through the PhoneBlock API, then delete this one.
+              </p>
+            {/if}
           {:else if s.kind === 'file'}
             <span class="url muted" title={s.url}>from {s.url}</span>
           {/if}
@@ -178,19 +208,18 @@
     <form id="source-form" class="form" onsubmit={submit}>
       {#if !src.id}
         <div class="presets">
-          <button type="button" class:selected={src.url.includes('phoneblock.net')} onclick={phoneBlock}>PhoneBlock</button>
-          <button type="button" class:selected={src.kind === 'carddav' && !src.url.includes('phoneblock.net')}
-            onclick={() => Object.assign(src!, { kind: 'carddav', url: src!.url.includes('phoneblock.net') ? '' : src!.url })}>
+          <button type="button" class:selected={src.kind === 'phoneblock'} onclick={phoneBlock}>PhoneBlock</button>
+          <button type="button" class:selected={src.kind === 'carddav'} onclick={() => setKind('carddav')}>
             CardDAV address book
           </button>
-          <button type="button" class:selected={src.kind === 'url'} onclick={() => Object.assign(src!, { kind: 'url' })}>
+          <button type="button" class:selected={src.kind === 'url'} onclick={() => setKind('url')}>
             Download (CSV, text, vCard)
           </button>
         </div>
-        {#if src.url.includes('phoneblock.net')}
+        {#if src.kind === 'phoneblock'}
           <p class="hint">
-            Use your PhoneBlock login as username and a <b>CardDAV token</b> as password (create one in your PhoneBlock
-            settings). All ~9,000 numbers are synced every 6 hours; only changes are downloaded.
+            The complete PhoneBlock blocklist is downloaded once; after that only the changes, once a day. Create an
+            <b>API key</b> in your PhoneBlock account settings. Your own PhoneBlock block- and allowlist are applied too.
           </p>
         {/if}
       {/if}
@@ -204,7 +233,35 @@
           </Field>
         {/if}
       </div>
-      {#if src.kind !== 'file'}
+      {#if src.kind === 'phoneblock'}
+        <Field label="API key" error={save.fields['password']} help={src.password_set ? 'Leave empty to keep it' : ''}>
+          <input type="password" bind:value={src.password} autocomplete="new-password"
+            placeholder={src.password_set ? '•••••••• (unchanged)' : ''} required={!src.password_set} />
+        </Field>
+        <div class="cols">
+          <Field label="Block numbers from" error={save.fields['min_votes']}
+            help="More votes: fewer numbers, fewer false positives">
+            <select bind:value={src.min_votes}>
+              {#each voteChoices as [v, l] (v)}<option value={v}>{l}</option>{/each}
+            </select>
+          </Field>
+          <Field label="Sync every" error={save.fields['interval_min']}>
+            <select bind:value={src.interval_min}>
+              {#each [[1440, 'day'], [2880, '2 days'], [10080, 'week']] as const as [v, l] (v)}
+                <option value={v}>{l}</option>
+              {/each}
+            </select>
+          </Field>
+        </div>
+        <button type="button" class="link" onclick={() => (advanced = !advanced)} aria-expanded={advanced}>
+          {advanced ? 'Hide' : 'Show'} advanced settings
+        </button>
+        {#if advanced}
+          <Field label="API URL" error={save.fields['url']} help="Leave empty for {PHONEBLOCK_API}">
+            <input bind:value={src.url} type="url" placeholder={PHONEBLOCK_API} />
+          </Field>
+        {/if}
+      {:else if src.kind !== 'file'}
         <Field label="URL" error={save.fields['url']}
           help={src.kind === 'carddav' ? 'Address book or address book home URL' : 'Downloaded on every sync; replaces the list'}>
           <input bind:value={src.url} type="url" required placeholder="https://" />
@@ -326,6 +383,17 @@
     margin: 0;
     font-size: 0.88rem;
     color: var(--muted);
+  }
+  .hint.small {
+    font-size: 0.8rem;
+  }
+  .link {
+    justify-self: start;
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    text-decoration: underline;
   }
   :global(.spin) {
     animation: spin 1s linear infinite;

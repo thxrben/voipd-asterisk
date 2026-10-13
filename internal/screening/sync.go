@@ -35,14 +35,21 @@ type Syncer struct {
 	running map[int64]bool
 }
 
+// Synced reports whether sources of a kind are downloaded periodically.
+func Synced(kind string) bool {
+	return kind == store.KindURL || kind == store.KindCardDAV || kind == store.KindPhoneBlock
+}
+
 // SyncResult summarizes one sync.
 type SyncResult struct {
-	Cards    int `json:"cards"`
-	Entries  int `json:"entries"`
-	Added    int `json:"added"`
-	Changed  int `json:"changed"`
-	Removed  int `json:"removed"`
-	Invalid  int `json:"invalid"`
+	Cards    int    `json:"cards"`
+	Entries  int    `json:"entries"`
+	Added    int    `json:"added"`
+	Changed  int    `json:"changed"`
+	Removed  int    `json:"removed"`
+	Invalid  int    `json:"invalid"`
+	Full     bool   `json:"full,omitempty"`    // PhoneBlock: the whole list was downloaded
+	Version  string `json:"version,omitempty"` // PhoneBlock: blocklist version now
 	Duration time.Duration
 }
 
@@ -97,7 +104,7 @@ func (s *Syncer) syncDue(ctx context.Context, force int64) {
 	}
 	for _, src := range srcs {
 		if src.ID == force || (src.Enabled && s.due(src)) {
-			if src.Kind != store.KindURL && src.Kind != store.KindCardDAV {
+			if !Synced(src.Kind) {
 				continue
 			}
 			if _, err := s.Sync(ctx, src.ID); err != nil && !errors.Is(err, ErrSyncRunning) && ctx.Err() == nil {
@@ -151,6 +158,8 @@ func (s *Syncer) Sync(ctx context.Context, id int64) (SyncResult, error) {
 		res, err = s.syncCardDAV(ctx, src)
 	case store.KindURL:
 		res, err = s.syncURL(ctx, src)
+	case store.KindPhoneBlock:
+		res, err = s.syncPhoneBlock(ctx, src)
 	default:
 		return res, fmt.Errorf("source %q of kind %s is not synced", src.Name, src.Kind)
 	}
@@ -169,6 +178,9 @@ func (s *Syncer) Sync(ctx context.Context, id int64) (SyncResult, error) {
 	}
 	data["entries"], data["added"], data["changed"], data["removed"], data["invalid"] =
 		res.Entries, res.Added, res.Changed, res.Removed, res.Invalid
+	if src.Kind == store.KindPhoneBlock {
+		data["full"], data["version"] = res.Full, res.Version
+	}
 	s.bus.Publish(events.Event{Type: EventSyncOK, Data: data})
 	s.log.Info("list synced", "source", src.Name, "entries", res.Entries, "added", res.Added,
 		"changed", res.Changed, "removed", res.Removed, "invalid", res.Invalid, "took", res.Duration.Round(time.Millisecond))

@@ -253,10 +253,45 @@ test('blocking: status, test a number, add, pause and anonymous switch', async (
   // PhoneBlock preset in the add-list dialog.
   await page.getByRole('tab', { name: 'Lists' }).click()
   await page.getByRole('button', { name: 'Add list' }).click()
-  await dlg.getByRole('button', { name: 'PhoneBlock' }).click()
-  await expect(dlg.getByLabel(/^URL/)).toHaveValue('https://phoneblock.net/phoneblock/contacts/')
-  await expect(dlg.getByLabel(/^CardDAV token/)).toBeVisible()
+  await dlg.getByRole('button', { name: 'PhoneBlock', exact: true }).click()
+  await expect(dlg.getByLabel(/^API key/)).toBeVisible()
+  await expect(dlg.getByLabel(/^URL/)).toHaveCount(0)
   await dlg.getByRole('button', { name: 'Cancel' }).click()
+})
+
+test('blocking: PhoneBlock API list', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept())
+  const pbURL = process.env.PB_URL ?? 'http://127.0.0.1:18097'
+  await loginAs(page, admin)
+  await page.goto('/blocking?tab=lists')
+  // The demo's CardDAV PhoneBlock list suggests switching to the API.
+  await expect(page.getByText("PhoneBlock's address book may only contain part")).toBeVisible()
+
+  await page.getByRole('button', { name: 'Add list' }).click()
+  const dlg = page.getByRole('dialog')
+  await dlg.getByRole('button', { name: 'PhoneBlock', exact: true }).click()
+  await expect(dlg.getByText('Create an API key')).toBeVisible()
+  await dlg.getByLabel('Name').fill('PhoneBlock API')
+  await dlg.getByLabel('Block numbers from').selectOption('10')
+  await dlg.getByRole('button', { name: 'Show advanced settings' }).click()
+  await dlg.getByLabel('API URL').fill(`${pbURL}/phoneblock/api`)
+  await dlg.getByRole('button', { name: 'Add and sync' }).click()
+  await expect(dlg.getByLabel('API key')).toHaveJSProperty('validity.valueMissing', true)
+  await dlg.getByLabel('API key').fill('pb-key')
+  await dlg.getByRole('button', { name: 'Add and sync' }).click()
+
+  const card = page.locator('section.card', { has: page.getByRole('heading', { name: 'PhoneBlock API' }) })
+  await expect(card).toContainText('synced')
+  await expect(card).toContainText('2,001 numbers in the PhoneBlock list')
+  await expect(card).toContainText('blocked from 10 votes')
+  // 20 votes: blocked; the generated numbers below 10 votes are not.
+  await page.getByLabel('Test a number').fill('0170 99990000')
+  await page.getByRole('button', { name: 'Test number' }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Blocked' })).toContainText('PhoneBlock API')
+
+  await page.goto('/blocking?tab=lists')
+  await card.getByRole('button', { name: 'Delete PhoneBlock API' }).click()
+  await expect(card).toHaveCount(0)
 })
 
 test('blocking: import a CSV file as a new list', async ({ page }) => {

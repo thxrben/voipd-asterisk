@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"voipd/internal/screening/carddavtest"
+	"voipd/internal/screening/phoneblocktest"
 )
 
 func (c *client) check(number string) map[string]any {
@@ -271,4 +272,75 @@ func TestScreeningAdminOnly(t *testing.T) {
 		u.getJSON(p, 403, nil)
 	}
 	u.send("POST", "/api/v1/lists/entries", map[string]any{"target": "block", "number": "01701234567"}, 403)
+}
+
+func TestPhoneBlockAPISource(t *testing.T) {
+	e := newEnv(t, nil)
+	a, _ := e.login(adminUser)
+	pb := phoneblocktest.New("api-key")
+	pb.Set("+4930999999", 20, "G_FRAUD")
+	pb.Set("+4940888888", 2, "E_ADVERTISING") // below the account's threshold (4)
+	hs := httptest.NewServer(pb)
+	defer hs.Close()
+
+	base := map[string]any{"name": "PhoneBlock", "kind": "phoneblock", "target": "block", "url": hs.URL + "/api",
+		"interval_min": 1440, "enabled": true, "min_votes": 0}
+	with := func(kv ...any) map[string]any {
+		m := map[string]any{}
+		for k, v := range base {
+			m[k] = v
+		}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i].(string)] = kv[i+1]
+		}
+		return m
+	}
+	res := a.send("POST", "/api/v1/lists/sources", with("interval_min", 60, "min_votes", 3, "target", "allow"), 422)
+	f := res["fields"].(map[string]any)
+	for _, k := range []string{"interval_min", "min_votes", "target", "password"} {
+		if f[k] == nil {
+			t.Errorf("no error for %s: %v", k, f)
+		}
+	}
+
+	sub, cancel := e.bus.Subscribe("list.", 4)
+	defer cancel()
+	sid := id(a.send("POST", "/api/v1/lists/sources", with("password", "api-key"), 201))
+	select {
+	case ev := <-sub:
+		if ev.Type != "list.sync_ok" || ev.Data["full"] != true {
+			t.Fatalf("event %+v", ev)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no sync event")
+	}
+	if d := a.check("030 999999"); d["block"] != true || d["name"] != "SPAM: Fraud (20)" {
+		t.Errorf("synced number: %v", d)
+	}
+	if d := a.check("040 888888"); d["block"] == true {
+		t.Errorf("number below the threshold: %v", d)
+	}
+
+	// A lower threshold applies on the next (incremental) sync.
+	a.send("PUT", fmt.Sprintf("/api/v1/lists/sources/%d", sid), with("min_votes", 2), 200)
+	select {
+	case ev := <-sub:
+		if ev.Type != "list.sync_ok" || ev.Data["full"] != false {
+			t.Fatalf("event %+v", ev)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no sync event after the update")
+	}
+	if d := a.check("040 888888"); d["block"] != true {
+		t.Errorf("lower threshold: %v", d)
+	}
+	var scr struct {
+		Sources []map[string]any `json:"sources"`
+	}
+	a.getJSON("/api/v1/screening", 200, &scr)
+	for _, s := range scr.Sources {
+		if s["name"] == "PhoneBlock" && (s["password"] != nil || s["cursor"] == "" || s["min_votes"] != float64(2)) {
+			t.Errorf("source: %v", s)
+		}
+	}
 }

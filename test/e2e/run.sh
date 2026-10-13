@@ -185,4 +185,47 @@ sleep 6 # hit counters are written in batches
 check "hits counted on both entries" "1|1" \
 	"$(sql "SELECT (SELECT hits FROM list_entries WHERE source_id=$PB AND pattern='+491701234567'), (SELECT hits FROM list_entries WHERE source_id=2 AND pattern='+491701234567')")"
 
+log "scenario: complete PhoneBlock list through the API (30,000 numbers), then only the changes"
+PB_PORT=${PB_PORT:-18097}
+(cd "$ROOT" && go build -o "$WORK/phoneblockfake" ./test/phoneblockfake)
+"$WORK/phoneblockfake" -listen "127.0.0.1:$PB_PORT" -token pb-key -n 30000 -tel +4917012340000 >"$WORK/pbfake.log" 2>&1 &
+BG_PIDS+=($!)
+pb_up() { curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PB_PORT/phoneblock/api/test" | grep -q 401; }
+wait_for "fake PhoneBlock API" 20 pb_up
+t0=$(now_ms)
+created=$(api POST /lists/sources '{"name":"PhoneBlock API","kind":"phoneblock","target":"block","url":"http://127.0.0.1:'"$PB_PORT"'/phoneblock/api","password":"pb-key","min_votes":0,"interval_min":1440,"enabled":true}')
+PBA=$(sed -n 's/.*"id":\([0-9]*\).*/\1/p' <<<"$created")
+pba_synced() { [ "$(sql "SELECT last_status FROM list_sources WHERE id=$PBA")" = ok ]; }
+wait_for "PhoneBlock API synced" 60 pba_synced
+echo "    full sync in $(( $(now_ms) - t0 )) ms"
+check "whole list mirrored" 30001 "$(sql "SELECT count(*) FROM phoneblock_numbers WHERE source_id=$PBA")"
+check "numbers with >= 4 votes (account setting) blocked" 26251 "$(sql "SELECT count(*) FROM list_entries WHERE source_id=$PBA")"
+check "first sync downloaded the full list" full "$(curl -s "http://127.0.0.1:$PB_PORT/_test/requests" | head -1)"
+peer "database put test phone10 ring" >/dev/null
+peer "database put test phone11 ring" >/dev/null
+peer "database put test callerid 017012340000" >/dev/null
+peer "channel originate Local/call@carrier-out application Wait 6" >/dev/null
+n=$((n + 1))
+sleep 6
+peer "channel request hangup all" >/dev/null
+wait_for "blocked call finished" 20 calls_done $n
+check "status" blocked "$(last_call status)"
+check "block reason" "blocklist:PhoneBlock API" "$(last_call block_reason)"
+check "caller name from PhoneBlock" "SPAM: Fraud (20)" "$(last_call caller_name)"
+check "no phone rang" 0 "$(sql "SELECT count(*) FROM call_legs WHERE call_id='$(last_call id)' AND kind='extension'")"
+
+curl -s -X POST "http://127.0.0.1:$PB_PORT/_test/set?phone=%2B4917012340000&votes=0" >/dev/null
+curl -s -X POST "http://127.0.0.1:$PB_PORT/_test/set?phone=%2B4917055550000&votes=50&rating=E_ADVERTISING" >/dev/null
+api POST "/lists/sources/$PBA/sync" >/dev/null
+changes_applied() { [ "$(sql "SELECT count(*) FROM list_entries WHERE source_id=$PBA AND pattern IN ('+4917012340000','+4917055550000')")" = 1 ] &&
+	[ "$(sql "SELECT count(*) FROM list_entries WHERE source_id=$PBA AND pattern='+4917055550000'")" = 1 ]; }
+wait_for "changes applied" 30 changes_applied
+check "second sync fetched only the changes" "since=" "$(curl -s "http://127.0.0.1:$PB_PORT/_test/requests" | sed -n 2p | cut -c1-6)"
+check "new number blocked" true \
+	"$(curl -s -b "$JAR" "$API/api/v1/screening/check?number=017055550000" | sed -n 's/.*"block":\([a-z]*\).*/\1/p')"
+peer "channel originate Local/call@carrier-out application Wait 15" >/dev/null
+n=$((n + 1))
+wait_for "call finished" 30 calls_done $n
+check "removed number rings again" missed "$(last_call status)"
+
 summary

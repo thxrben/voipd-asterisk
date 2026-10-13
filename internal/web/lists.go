@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -197,7 +198,7 @@ func (s *Server) deleteEntry(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		var src store.ListSource
 		src, err = s.d.Store.ListSource(r.Context(), e.SourceID)
-		if err == nil && (src.Kind == store.KindURL || src.Kind == store.KindCardDAV) {
+		if err == nil && screening.Synced(src.Kind) {
 			err = userError(fmt.Sprintf("this number comes from %q and returns with the next sync; add it to the allowlist instead", src.Name))
 		}
 	}
@@ -393,20 +394,42 @@ func validateSource(src *store.ListSource, create bool) error {
 		errs["name"] = "1–60 characters"
 	}
 	if create {
-		if src.Kind != store.KindURL && src.Kind != store.KindCardDAV {
-			errs["kind"] = "url or carddav"
+		if src.Kind != store.KindURL && src.Kind != store.KindCardDAV && src.Kind != store.KindPhoneBlock {
+			errs["kind"] = "url, carddav or phoneblock"
 		}
 		if !validTarget(src.Target) {
 			errs["target"] = "block, allow or contacts"
 		}
 	}
-	if src.Kind == store.KindURL || src.Kind == store.KindCardDAV {
+	switch src.Kind {
+	case store.KindURL, store.KindCardDAV:
 		if err := checkHTTPURL(src.URL); err != nil {
 			errs["url"] = err.Error()
 		}
 		if src.IntervalMin < 15 || src.IntervalMin > 7*24*60 {
 			errs["interval_min"] = "between 15 minutes and 7 days"
 		}
+		src.MinVotes = 0
+	case store.KindPhoneBlock:
+		// PhoneBlock asks for at most one (incremental) sync per day.
+		if src.URL == "" {
+			src.URL = screening.PhoneBlockAPI
+		} else if err := checkHTTPURL(src.URL); err != nil {
+			errs["url"] = err.Error()
+		}
+		if src.IntervalMin < 24*60 || src.IntervalMin > 7*24*60 {
+			errs["interval_min"] = "between 1 and 7 days (PhoneBlock asks for at most one sync per day)"
+		}
+		if src.MinVotes != 0 && !slices.Contains(screening.PhoneBlockVotes, src.MinVotes) {
+			errs["min_votes"] = "the account setting, 2, 4, 10, 20, 50 or 100"
+		}
+		if create && src.Target != store.TargetBlock {
+			errs["target"] = "PhoneBlock is a blocklist"
+		}
+		if create && strings.TrimSpace(src.Password) == "" {
+			errs["password"] = "enter a PhoneBlock API key"
+		}
+		src.Username = ""
 	}
 	if len(errs) > 0 {
 		return errs
@@ -466,7 +489,8 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		s.recordAudit(r, "list.source.update", j.Name, map[string]any{"enabled": j.Enabled, "url": j.URL,
 			"password_changed": j.Password != ""})
-		if j.Enabled && (old.URL != j.URL || old.Username != j.Username || j.Password != "" || !old.Enabled) {
+		if j.Enabled && (old.URL != j.URL || old.Username != j.Username || j.Password != "" || !old.Enabled ||
+			old.MinVotes != j.MinVotes) {
 			s.d.Syncer.Kick(id)
 		}
 	}
@@ -505,8 +529,8 @@ func (s *Server) syncSource(w http.ResponseWriter, r *http.Request) {
 		s.listResult(w, r, err, 0, nil)
 		return
 	}
-	if src.Kind != store.KindURL && src.Kind != store.KindCardDAV {
-		writeError(w, http.StatusConflict, "only URL and CardDAV lists are synced")
+	if !screening.Synced(src.Kind) {
+		writeError(w, http.StatusConflict, "only downloaded lists are synced")
 		return
 	}
 	s.recordAudit(r, "list.source.sync", src.Name, nil)
@@ -630,7 +654,7 @@ func (s *Server) deleteContact(w http.ResponseWriter, r *http.Request) {
 	c, err := s.d.Store.CardByID(r.Context(), id)
 	if err == nil {
 		src, serr := s.d.Store.ListSource(r.Context(), c.SourceID)
-		if serr == nil && (src.Kind == store.KindURL || src.Kind == store.KindCardDAV) {
+		if serr == nil && screening.Synced(src.Kind) {
 			err = userError("this contact is synced from another address book; delete it there")
 		}
 	}

@@ -47,7 +47,8 @@ type call struct {
 	ch     engine.Channel // the channel that started the call, as it entered
 	rec    store.Call
 	a      *leg            // the channel that started the call
-	legs   map[string]*leg // dialed legs (B side)
+	legs   map[string]*leg // dialed legs (B side), by channel id
+	order  []*leg          // dialed legs in dial order, for deterministic iteration
 	bridge string
 }
 
@@ -207,7 +208,7 @@ func (c *call) leg(id string) *leg {
 
 func (c *call) liveLegs() int {
 	n := 0
-	for _, l := range c.legs {
+	for _, l := range c.order {
 		if l.state != legGone {
 			n++
 		}
@@ -270,7 +271,7 @@ func (c *call) resync() {
 		}
 	}
 	check(c.a)
-	for _, l := range c.legs {
+	for _, l := range c.order {
 		check(l)
 	}
 }
@@ -288,7 +289,7 @@ func (c *call) hangup(l *leg, reason engine.HangupReason) {
 }
 
 func (c *call) hangupLegs(reason engine.HangupReason, except *leg) {
-	for _, l := range c.legs {
+	for _, l := range c.order {
 		if l != except {
 			c.hangup(l, reason)
 		}

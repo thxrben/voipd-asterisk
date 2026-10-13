@@ -24,7 +24,7 @@ start_peer "$PEER2"
 PEER_IP=$(ip_of "$PEER")
 PEER2_IP=$(ip_of "$PEER2")
 mkdir -p "$WORK/dns"
-echo "carrier.e2e $PEER_IP" >"$WORK/dns/zone"
+echo "carrier.e2e. 1 IN A $PEER_IP" >"$WORK/dns/zone"
 docker run -d --name "$DNS" --entrypoint /fakedns/fakedns \
 	-v "$WORK/fakedns:/fakedns/fakedns:ro" -v "$WORK/dns:/data" "$IMAGE" >/dev/null
 CONTAINERS+=("$DNS")
@@ -89,7 +89,7 @@ within "trunk.up after DNS returns" 75 events_since trunk.up "$T"
 
 log "scenario: carrier moves to a new IP (DNS target change)"
 T=$(now_ms)
-echo "carrier.e2e $PEER2_IP" >"$WORK/dns/zone"
+echo "carrier.e2e. 1 IN A $PEER2_IP" >"$WORK/dns/zone"
 within "registered at the new carrier IP" 20 registered_at "$PEER2"
 check "re-registration was forced by the DNS watcher" 1 \
 	"$(sql "SELECT count(*) > 0 FROM sip_events WHERE type='trunk.reconnecting' AND at >= $T AND json_extract(detail,'$.reason')='dns_changed'")"
@@ -102,7 +102,6 @@ within "engine.up reported" 40 events_since engine.up "$T"
 within "trunk registered again" 40 registered
 
 log "scenario: long outage escalates to an engine restart"
-uptime_before=$(pbx "core show uptime seconds" | sed -n 's/System uptime: //p')
 T=$(now_ms)
 docker pause "$PEER2" >/dev/null
 within "trunk.down announced" 100 events_since trunk.down "$T"
@@ -110,9 +109,10 @@ restarted() { [ "$(sql "SELECT count(*) FROM sip_events WHERE type='trunk.reconn
 within "voipd restarts the engine after restart_after (100s)" 200 restarted
 within "voipd reconnects to the restarted engine" 40 events_since engine.up "$T"
 uptime_after=$(pbx "core show uptime seconds" | sed -n 's/System uptime: //p')
-[ -n "$uptime_after" ] && [ "$uptime_after" -lt "${uptime_before:-0}" ] &&
-	ok "Asterisk really restarted (uptime ${uptime_before}s -> ${uptime_after}s)" ||
-	bad "Asterisk uptime did not reset (${uptime_before:-?} -> ${uptime_after:-?})"
+since_outage=$(( ($(now_ms) - T) / 1000 ))
+[ -n "$uptime_after" ] && [ "$uptime_after" -lt "$since_outage" ] &&
+	ok "Asterisk really restarted (uptime ${uptime_after}s < ${since_outage}s since the outage began)" ||
+	bad "Asterisk did not restart (uptime ${uptime_after:-?}s, outage began ${since_outage}s ago)"
 T=$(now_ms)
 docker unpause "$PEER2" >/dev/null
 within "trunk.up after the outage" 75 events_since trunk.up "$T"

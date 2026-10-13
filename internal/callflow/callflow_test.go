@@ -508,3 +508,28 @@ func TestShutdownDuringCallDoesNotHang(t *testing.T) {
 
 func (f *fakeEngine) ReloadRegistrations(context.Context) error { return nil }
 func (f *fakeEngine) RestartWhenIdle(context.Context) error     { return nil }
+
+func TestLoadCountsCallsPerTrunk(t *testing.T) {
+	e := newEnv(t, 30, "hangup")
+	e.inbound("A", "+491701234567")
+	e.eng.expect(t, "ring A")
+	e.fromPhone("B", "10", "11") // internal: no trunk
+	// The two calls run concurrently: wait for all three originates in any order.
+	got := map[string]int{}
+	for i := 0; i < 3; i++ {
+		select {
+		case a := <-e.eng.actions:
+			got[a]++
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out; got %v", got)
+		}
+	}
+	if got["originate kitchen"] != 1 || got["originate office"] != 2 {
+		t.Fatalf("actions = %v", got)
+	}
+
+	total, byTrunk := e.m.Load()
+	if total != 2 || byTrunk["telekom"] != 1 || len(byTrunk) != 1 {
+		t.Errorf("load = %d %v, want 2 calls, 1 on telekom", total, byTrunk)
+	}
+}

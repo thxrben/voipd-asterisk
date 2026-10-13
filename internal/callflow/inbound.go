@@ -29,6 +29,7 @@ func (c *call) inbound() {
 	c.rec.Caller = callerValue(caller, c.ch.Caller.Number)
 	c.rec.Callee = line.Number
 	c.rec.TrunkID = line.TrunkID
+	c.m.setTrunk(c, line.TrunkName)
 	if !c.begin("trunk") {
 		c.hangup(c.a, engine.HangupCongestion)
 		return

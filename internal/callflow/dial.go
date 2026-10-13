@@ -41,6 +41,7 @@ func (c *call) dial(targets []target, timeout time.Duration, onRinging func()) (
 		}}
 		l.rec.ID = l.id
 		c.legs[l.id] = l
+		c.order = append(c.order, l)
 		c.m.track(l.id, c)
 
 		ctx, cancel := c.actx()

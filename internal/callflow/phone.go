@@ -74,6 +74,7 @@ func (c *call) outbound(from store.Extension, dialed string) {
 	cancel()
 	if lineErr == nil {
 		c.rec.TrunkID = line.TrunkID
+		c.m.setTrunk(c, line.TrunkName)
 	}
 	if !c.begin("extension") {
 		c.hangup(c.a, engine.HangupCongestion)

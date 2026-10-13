@@ -116,7 +116,7 @@ func TestResolveTargetsFollowsNAPTR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "217.0.1.1:5060 217.0.1.1:5061 217.0.1.2:5060 [2003:0:1::1]:5060 [2003:0:1::1]:5061"
+	want := "n0p0 217.0.1.1:5061 n0p0 [2003:0:1::1]:5061 n1p0 217.0.1.1:5060 n1p0 217.0.1.2:5060 n1p0 [2003:0:1::1]:5060"
 	if s := join(got); s != want {
 		t.Errorf("targets = %s\nwant      %s", s, want)
 	}
@@ -158,5 +158,14 @@ func TestDNSWatcherReportsChangesButNotOutages(t *testing.T) {
 	w.check(context.Background(), hosts, rec)
 	if join(changed) != "tel.t-online.de=trunk-telekom-1" {
 		t.Fatalf("changes = %v", changed)
+	}
+
+	// Same servers, but the carrier now prefers sbc2 (SRV priority).
+	changed = nil
+	udp := r.srv["_sip._udp.tel.t-online.de"]
+	udp[0].Priority, udp[1].Priority = 20, 10
+	w.check(context.Background(), hosts, rec)
+	if len(changed) != 1 {
+		t.Fatalf("priority change not detected: %v", changed)
 	}
 }

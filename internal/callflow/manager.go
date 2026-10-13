@@ -47,6 +47,7 @@ type Manager struct {
 
 	mu        sync.Mutex
 	byChannel map[string]*call
+	trunkOf   map[*call]string // trunk name of calls using a trunk
 	wg        sync.WaitGroup
 }
 
@@ -62,7 +63,7 @@ func NewManager(d Deps) *Manager {
 		// side that hangs up first only has what was sampled before.
 		d.QualityEvery = 2 * time.Second
 	}
-	return &Manager{d: d, byChannel: map[string]*call{}}
+	return &Manager{d: d, byChannel: map[string]*call{}, trunkOf: map[*call]string{}}
 }
 
 // Wait blocks until all calls have finished (after ctx cancellation they
@@ -139,8 +140,17 @@ func (m *Manager) track(channelID string, c *call) {
 	m.mu.Unlock()
 }
 
+// setTrunk records which trunk a call uses, so disruptive trunk recovery
+// actions can wait for it.
+func (m *Manager) setTrunk(c *call, trunk string) {
+	m.mu.Lock()
+	m.trunkOf[c] = trunk
+	m.mu.Unlock()
+}
+
 func (m *Manager) untrackAll(c *call) {
 	m.mu.Lock()
+	delete(m.trunkOf, c)
 	for id, o := range m.byChannel {
 		if o == c {
 			delete(m.byChannel, id)
@@ -179,6 +189,23 @@ func (m *Manager) ActiveCalls() int {
 		seen[c] = true
 	}
 	return len(seen)
+}
+
+// Load returns the number of calls in progress, in total and per trunk.
+func (m *Manager) Load() (total int, byTrunk map[string]int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := map[*call]bool{}
+	for _, c := range m.byChannel {
+		seen[c] = true
+	}
+	byTrunk = map[string]int{}
+	for c := range seen {
+		if t, ok := m.trunkOf[c]; ok {
+			byTrunk[t]++
+		}
+	}
+	return len(seen), byTrunk
 }
 
 func newID() string {

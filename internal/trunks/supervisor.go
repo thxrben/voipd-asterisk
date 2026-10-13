@@ -13,6 +13,11 @@
 // Network changes (local/public IP, DNS targets) trigger an immediate
 // re-register even for registrations that look healthy, because a stale
 // registration after an IP change looks "Registered" until it expires.
+//
+// Running calls are never disturbed: a re-register waits while a call is
+// up on that trunk (de-registering can tear down calls, e.g. in Telekom's
+// IMS), and module reloads and engine restarts wait until no call at all is
+// up. Outages are still announced right away; only recovery actions wait.
 package trunks
 
 import (
@@ -105,15 +110,22 @@ type regState struct {
 	announced bool      // trunk.down was published for this outage
 	attempts  int
 	next      time.Time // next escalation action
+	deferred  bool      // recovery currently held back by active calls
+}
+
+// Load describes the calls in progress, for deferring disruptive actions.
+type Load struct {
+	Calls   int            // all calls, including internal ones
+	ByTrunk map[string]int // calls with a leg on the trunk (by trunk name)
 }
 
 type Supervisor struct {
-	act         Actions
-	bus         *events.Bus
-	record      Recorder
-	log         *slog.Logger
-	pol         Policy
-	activeCalls func() int
+	act    Actions
+	bus    *events.Bus
+	record Recorder
+	log    *slog.Logger
+	pol    Policy
+	load   func() Load
 
 	mu          sync.Mutex
 	regs        map[string]*regState
@@ -121,11 +133,12 @@ type Supervisor struct {
 	reloaded    bool // module reload done during the current outage
 	lastRestart time.Time
 	lastKick    time.Time
+	pending     map[string]string // forced re-registers waiting to run: registration -> reason
 }
 
-func NewSupervisor(act Actions, bus *events.Bus, record Recorder, log *slog.Logger, pol Policy, activeCalls func() int) *Supervisor {
+func NewSupervisor(act Actions, bus *events.Bus, record Recorder, log *slog.Logger, pol Policy, load func() Load) *Supervisor {
 	return &Supervisor{act: act, bus: bus, record: record, log: log, pol: pol,
-		activeCalls: activeCalls, regs: map[string]*regState{}}
+		load: load, regs: map[string]*regState{}, pending: map[string]string{}}
 }
 
 // SetLines declares the registrations that should exist. Unknown ones are
@@ -290,6 +303,8 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	}
 	var downs []announce
 	var acts []action
+	var deferredNow []string
+	load := s.load()
 
 	s.mu.Lock()
 	if !s.engineUp {
@@ -317,12 +332,25 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		if now.Before(r.next) {
 			continue
 		}
+		if load.ByTrunk[r.Trunk] > 0 {
+			// A call is up on this trunk: leave the registration alone.
+			// The action stays due and runs on the first tick after it.
+			if !r.deferred {
+				r.deferred = true
+				deferredNow = append(deferredNow, name)
+			}
+			continue
+		}
+		r.deferred = false
 		r.attempts++
 		a := action{kind: "reregister", reg: name, attempt: r.attempts}
+		idle := load.Calls == 0 // reload and restart affect every call
 		switch {
-		case r.attempts > s.pol.ReregisterAttempts && !s.reloaded && !globalDone:
+		case r.attempts > s.pol.ReregisterAttempts && !s.reloaded && !globalDone && idle:
 			a.kind, s.reloaded, globalDone = "reload", true, true
-		case down >= s.pol.RestartAfter && !globalDone && s.activeCalls() == 0 &&
+		// Restart only once the cheaper steps were actually tried (a long
+		// outage spent waiting for a call to end must not skip them).
+		case s.reloaded && down >= s.pol.RestartAfter && !globalDone && idle &&
 			(s.lastRestart.IsZero() || now.Sub(s.lastRestart) >= s.pol.RestartCooldown):
 			a.kind, s.lastRestart, globalDone = "restart", now, true
 		}
@@ -330,7 +358,12 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		backoff := s.pol.FirstRetry << min(r.attempts-1, 16)
 		r.next = now.Add(min(backoff, s.pol.MaxBackoff))
 	}
+	kicks := s.takeKicksLocked(now, load)
 	s.mu.Unlock()
+
+	for _, name := range deferredNow {
+		s.log.Info("trunk recovery deferred while calls are active", "registration", name)
+	}
 
 	for _, d := range downs {
 		s.log.Warn("trunk registration down", "registration", d.name, "detail", d.detail["detail"])
@@ -339,28 +372,74 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 	for _, a := range acts {
 		s.run(ctx, now, a, "escalation")
 	}
+	s.runKicks(ctx, now, kicks)
 }
 
-// Kick forces re-registration of the given registrations (all if none are
-// given) after a network change. Rate-limited by KickCooldown.
+// Kick requests a forced re-registration of the given registrations (all
+// if none are given) after a network change. It runs immediately when
+// possible; otherwise it stays pending (nothing is dropped) until the
+// KickCooldown has passed and no call is up on the registration's trunk.
 func (s *Supervisor) Kick(ctx context.Context, now time.Time, reason string, registrations ...string) {
+	load := s.load()
 	s.mu.Lock()
-	if !s.engineUp || (!s.lastKick.IsZero() && now.Sub(s.lastKick) < s.pol.KickCooldown) {
-		s.mu.Unlock()
-		return
-	}
-	s.lastKick = now
 	if len(registrations) == 0 {
 		for n := range s.regs {
 			registrations = append(registrations, n)
 		}
 	}
-	sort.Strings(registrations)
+	for _, name := range registrations {
+		if _, ok := s.regs[name]; !ok {
+			continue
+		}
+		if prev, ok := s.pending[name]; ok && prev != reason {
+			reason = prev + "+" + reason
+		}
+		s.pending[name] = reason
+	}
+	kicks := s.takeKicksLocked(now, load)
+	waiting := len(s.pending)
 	s.mu.Unlock()
 
-	s.log.Info("network change, forcing re-registration", "reason", reason, "registrations", len(registrations))
-	for _, name := range registrations {
-		s.run(ctx, now, action{kind: "reregister", reg: name}, reason)
+	if waiting > 0 {
+		s.log.Info("network change: re-registration pending", "reason", reason, "waiting", waiting)
+	}
+	s.runKicks(ctx, now, kicks)
+}
+
+type kick struct{ reg, reason string }
+
+// takeKicksLocked removes and returns the pending kicks that may run now.
+func (s *Supervisor) takeKicksLocked(now time.Time, load Load) []kick {
+	if !s.engineUp || len(s.pending) == 0 ||
+		(!s.lastKick.IsZero() && now.Sub(s.lastKick) < s.pol.KickCooldown) {
+		return nil
+	}
+	var out []kick
+	for name, reason := range s.pending {
+		r := s.regs[name]
+		if r == nil {
+			delete(s.pending, name)
+			continue
+		}
+		if load.ByTrunk[r.Trunk] > 0 {
+			continue
+		}
+		out = append(out, kick{name, reason})
+		delete(s.pending, name)
+	}
+	if len(out) > 0 {
+		s.lastKick = now
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].reg < out[j].reg })
+	return out
+}
+
+func (s *Supervisor) runKicks(ctx context.Context, now time.Time, kicks []kick) {
+	if len(kicks) > 0 {
+		s.log.Info("network change, forcing re-registration", "reason", kicks[0].reason, "registrations", len(kicks))
+	}
+	for _, k := range kicks {
+		s.run(ctx, now, action{kind: "reregister", reg: k.reg}, k.reason)
 	}
 }
 

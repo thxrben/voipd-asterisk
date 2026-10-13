@@ -22,8 +22,11 @@ type Resolver interface {
 	Addrs(ctx context.Context, host string) ([]netip.Addr, error)
 }
 
-// ResolveTargets returns the sorted set of "ip:port" a SIP client would use
-// for host, following NAPTR, then the default SRV names, then A/AAAA.
+// ResolveTargets returns the targets a SIP client would use for host,
+// following NAPTR, then the default SRV names, then A/AAAA. Each target is
+// "<rank> ip:port" where rank encodes NAPTR order and SRV priority
+// ("n0p10"), so a change in the carrier's preference is a change in the
+// result. SRV weights are ignored: they shuffle randomly by design.
 func ResolveTargets(ctx context.Context, r Resolver, host string) ([]string, error) {
 	if _, err := netip.ParseAddr(host); err == nil {
 		return []string{host}, nil
@@ -37,7 +40,7 @@ func ResolveTargets(ctx context.Context, r Resolver, host string) ([]string, err
 	}
 
 	set := map[string]bool{}
-	for _, name := range srvNames {
+	for i, name := range srvNames {
 		srvs, err := r.SRV(ctx, name)
 		if err != nil {
 			if isNotFound(err) {
@@ -51,7 +54,7 @@ func ResolveTargets(ctx context.Context, r Resolver, host string) ([]string, err
 				return nil, err
 			}
 			for _, a := range addrs {
-				set[netip.AddrPortFrom(a, s.Port).String()] = true
+				set[fmt.Sprintf("n%dp%d %s", i, s.Priority, netip.AddrPortFrom(a, s.Port))] = true
 			}
 		}
 	}

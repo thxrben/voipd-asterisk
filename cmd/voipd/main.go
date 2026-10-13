@@ -81,7 +81,10 @@ func run() error {
 		Log:     log.With("component", "calls"),
 	})
 	sup := trunks.NewSupervisor(eng, bus, st.AddSIPEvent, log.With("component", "trunks"),
-		policy(cfg.Trunks), calls.ActiveCalls)
+		policy(cfg.Trunks), func() trunks.Load {
+			total, byTrunk := calls.Load()
+			return trunks.Load{Calls: total, ByTrunk: byTrunk}
+		})
 
 	netCfg, _ := cfg.Network.Parsed() // validated by config.Load
 	conf := pbx.NewConfigurator(st, eng, sup, engine.Network{

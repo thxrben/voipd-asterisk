@@ -1,16 +1,20 @@
-// Command fakedns is a tiny authoritative DNS server for the e2e chaos
-// tests. It answers A queries from a zone file that is re-read on every
-// query (so tests change records by rewriting the file) with TTL 1, and
-// stops answering entirely while a "down" file exists (DNS outage).
+// Command fakedns is a tiny authoritative DNS server for the e2e tests.
+// It answers from a zone file that is re-read on every query (tests change
+// records by rewriting the file) and stops answering entirely while a
+// "down" file exists (DNS outage).
 //
-//	zone file lines: <name> <ipv4>
+// Zone file: one resource record per line in standard presentation format,
+// e.g.
+//
+//	carrier.e2e. 1 IN NAPTR 10 50 "s" "SIP+D2U" "" _sip._udp.carrier.e2e.
+//	_sip._udp.carrier.e2e. 1 IN SRV 10 50 5060 sbc1.carrier.e2e.
+//	sbc1.carrier.e2e. 1 IN A 172.17.0.3
 package main
 
 import (
 	"bufio"
 	"flag"
 	"log"
-	"net"
 	"os"
 	"strings"
 
@@ -30,21 +34,20 @@ func main() {
 		m := new(dns.Msg)
 		m.SetReply(q)
 		m.Authoritative = true
-		records := load(*zone)
+		rrs := load(*zone)
 		for _, qq := range q.Question {
-			ip, ok := records[strings.ToLower(qq.Name)]
-			if !ok {
-				continue
+			nameKnown := false
+			for _, rr := range rrs {
+				h := rr.Header()
+				if !strings.EqualFold(h.Name, qq.Name) {
+					continue
+				}
+				nameKnown = true
+				if h.Rrtype == qq.Qtype || qq.Qtype == dns.TypeANY {
+					m.Answer = append(m.Answer, rr)
+				}
 			}
-			if qq.Qtype == dns.TypeA {
-				m.Answer = append(m.Answer, &dns.A{
-					Hdr: dns.RR_Header{Name: qq.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1},
-					A:   net.ParseIP(ip),
-				})
-			}
-		}
-		if len(m.Answer) == 0 && len(q.Question) > 0 {
-			if _, ok := records[strings.ToLower(q.Question[0].Name)]; !ok {
+			if !nameKnown {
 				m.Rcode = dns.RcodeNameError
 			}
 		}
@@ -58,19 +61,25 @@ func main() {
 	select {}
 }
 
-func load(path string) map[string]string {
-	out := map[string]string{}
+func load(path string) []dns.RR {
 	f, err := os.Open(path)
 	if err != nil {
-		return out
+		return nil
 	}
 	defer f.Close()
+	var out []dns.RR
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) == 2 {
-			out[dns.Fqdn(strings.ToLower(fields[0]))] = fields[1]
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, ";") {
+			continue
 		}
+		rr, err := dns.NewRR(line)
+		if err != nil {
+			log.Printf("zone: %v", err)
+			continue
+		}
+		out = append(out, rr)
 	}
 	return out
 }

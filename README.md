@@ -67,13 +67,26 @@ Asterisk's registration retries are configured never to give up (also after
 2. escalates while down: forced re-register with backoff → reload of the
    registration module → engine restart, only when no calls are active;
 3. forces re-registration immediately when local addresses, the IPv6
-   prefix, the public IP or the registrar's DNS targets (NAPTR/SRV/A) change.
+   prefix, the public IP or the registrar's DNS targets (NAPTR/SRV/A,
+   including a change of server preference) change.
+
+Running calls are never disturbed: re-registering waits while a call is up
+on that trunk (de-registering can tear down calls, e.g. at Telekom), module
+reloads and engine restarts wait until no call at all is up. Outages are
+still announced immediately; only recovery actions wait, and nothing that
+is waiting gets dropped.
+
+Registrars are resolved per RFC 3263 (NAPTR → SRV → A/AAAA), so a carrier
+with several servers (e.g. `tel.t-online.de`) works out of the box,
+including failover to the next SRV target when the preferred one dies.
 
 ## Tests
 
 ```sh
 go test -race ./...     # unit tests (call flows run against a fake engine)
 test/e2e/run.sh         # real Asterisk: calls between carrier, PBX and phones (~1 min)
+test/e2e/dns.sh         # Telekom-like NAPTR/SRV with two servers and two numbers: resolution,
+                        # per-number routing, failover, no re-registration during calls (~6 min)
 test/e2e/chaos.sh       # trunk outages, auth rejection, DNS failure, carrier IP move,
                         # engine restarts; asserts detection and bounded recovery (~12 min)
 ```

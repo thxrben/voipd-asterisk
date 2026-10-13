@@ -45,7 +45,7 @@ type harness struct {
 	sup    *Supervisor
 	events <-chan events.Event
 	now    time.Time
-	active int
+	load   Load
 }
 
 func newHarness(t *testing.T) *harness {
@@ -53,7 +53,7 @@ func newHarness(t *testing.T) *harness {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	bus := events.NewBus(log)
 	h.events, _ = bus.Subscribe("", 100)
-	h.sup = NewSupervisor(h.act, bus, nil, log, DefaultPolicy(), func() int { return h.active })
+	h.sup = NewSupervisor(h.act, bus, nil, log, DefaultPolicy(), func() Load { return h.load })
 	h.sup.SetLines([]Line{
 		{Registration: "trunk-telekom-1", Trunk: "telekom", Number: "+492011111111"},
 		{Registration: "trunk-telekom-2", Trunk: "telekom", Number: "+492012222222"},
@@ -153,10 +153,10 @@ func TestEscalationLadder(t *testing.T) {
 	h.advance(360 * time.Second) // t=720, below RestartAfter (15 min)
 	h.expectActions("reregister trunk-telekom-1")
 
-	h.active = 1
+	h.load = Load{Calls: 1}      // an internal call: blocks the restart, not re-registering
 	h.advance(600 * time.Second) // t=1320
 	h.expectActions("reregister trunk-telekom-1")
-	h.active = 0
+	h.load = Load{}
 	h.advance(600 * time.Second) // t=1920
 	h.expectActions("restart")
 	h.advance(600 * time.Second) // t=2520
@@ -187,16 +187,75 @@ func TestEngineDisconnectedPausesActions(t *testing.T) {
 	h.expectActions("reregister trunk-telekom-1")
 }
 
-func TestKickReregistersHealthyLinesAndIsRateLimited(t *testing.T) {
+func TestKickReregistersHealthyLinesAndQueuesDuringCooldown(t *testing.T) {
 	h := newHarness(t)
 	h.observe("trunk-telekom-1", engine.RegRegistered)
 	h.observe("trunk-telekom-2", engine.RegRegistered)
 	h.sup.Kick(context.Background(), h.now, "ip_changed")
 	h.expectActions("reregister trunk-telekom-1,reregister trunk-telekom-2")
-	h.sup.Kick(context.Background(), h.now.Add(5*time.Second), "ip_changed")
+
+	// Within the cooldown a new trigger is queued, not dropped...
+	h.advance(5 * time.Second)
+	h.sup.Kick(context.Background(), h.now, "dns_changed", "trunk-telekom-2")
 	h.expectActions("")
-	h.sup.Kick(context.Background(), h.now.Add(11*time.Second), "dns_changed", "trunk-telekom-2")
+	// ...and runs as soon as the cooldown is over.
+	h.advance(5 * time.Second)
 	h.expectActions("reregister trunk-telekom-2")
+}
+
+func TestKickWaitsForCallsOnTheTrunk(t *testing.T) {
+	h := newHarness(t)
+	h.observe("trunk-telekom-1", engine.RegRegistered)
+	h.observe("trunk-telekom-2", engine.RegRegistered)
+	h.load = Load{Calls: 1, ByTrunk: map[string]int{"telekom": 1}}
+	h.sup.Kick(context.Background(), h.now, "ip_changed")
+	h.advance(10 * time.Minute)
+	h.expectActions("") // never while the call is up
+
+	h.load = Load{}
+	h.advance(time.Second)
+	h.expectActions("reregister trunk-telekom-1,reregister trunk-telekom-2")
+}
+
+func TestKickIgnoresCallsOnOtherTrunks(t *testing.T) {
+	h := newHarness(t)
+	h.observe("trunk-telekom-1", engine.RegRegistered)
+	h.load = Load{Calls: 2, ByTrunk: map[string]int{"sipgate": 1}} // + one internal call
+	h.sup.Kick(context.Background(), h.now, "ip_changed", "trunk-telekom-1")
+	h.expectActions("reregister trunk-telekom-1")
+}
+
+func TestRecoveryWaitsForCallsOnTheTrunk(t *testing.T) {
+	h := newHarness(t)
+	h.observe("trunk-telekom-1", engine.RegRegistered)
+	h.expectEvents(EventUp)
+	h.load = Load{Calls: 1, ByTrunk: map[string]int{"telekom": 1}}
+
+	h.observe("trunk-telekom-1", engine.RegRejected)
+	h.advance(30 * time.Minute)
+	h.expectEvents(EventDown) // the outage is still announced right away
+	h.expectActions("")       // but nothing touches the trunk during the call
+
+	h.load = Load{}
+	h.advance(time.Second)
+	h.expectActions("reregister trunk-telekom-1")
+}
+
+func TestReloadAndRestartWaitForAllCalls(t *testing.T) {
+	h := newHarness(t)
+	h.observe("trunk-telekom-1", engine.RegRegistered)
+	h.observe("trunk-telekom-1", engine.RegRejected)
+	h.advance(180 * time.Second) // three re-registers (45, 90, 180)
+	h.expectActions("reregister trunk-telekom-1,reregister trunk-telekom-1,reregister trunk-telekom-1")
+
+	// An internal call is up when the reload would be due (t=360): only a
+	// re-register (which cannot affect it) happens.
+	h.load = Load{Calls: 1}
+	h.advance(180 * time.Second)
+	h.expectActions("reregister trunk-telekom-1")
+	h.load = Load{}
+	h.advance(360 * time.Second) // next attempt at t=720
+	h.expectActions("reload")
 }
 
 func TestPollMarksMissingRegistrationsDown(t *testing.T) {

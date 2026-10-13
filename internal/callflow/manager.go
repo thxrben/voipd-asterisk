@@ -1,0 +1,188 @@
+// Package callflow implements voipd's call logic on top of engine.Engine:
+// inbound DID routing with parallel ringing, internal calls between
+// extensions, outbound calls via trunks, and screening (stealth blocking).
+//
+// Concurrency model: every call runs in its own goroutine and owns all of
+// its state. The Manager only routes engine events to the call that owns
+// the channel. Leg channel IDs are chosen by voipd before dialing, so
+// events can never arrive for a leg the manager does not know yet.
+package callflow
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"log/slog"
+	"sync"
+	"time"
+
+	"voipd/internal/engine"
+	"voipd/internal/events"
+	"voipd/internal/numbers"
+	"voipd/internal/store"
+)
+
+// Entry arguments set by the Asterisk dialplan / our originates.
+const (
+	argInbound  = "inbound"
+	argInternal = "internal"
+	argLeg      = "leg"
+)
+
+type Deps struct {
+	Engine   engine.Engine
+	Store    *store.Store
+	Numbers  *numbers.Normalizer
+	Bus      *events.Bus
+	Log      *slog.Logger
+	Screener Screener // nil = allow everything
+
+	// Optional overrides for tests.
+	Now          func() time.Time
+	QualityEvery time.Duration // RTCP polling interval for answered legs
+}
+
+type Manager struct {
+	d Deps
+
+	mu        sync.Mutex
+	byChannel map[string]*call
+	wg        sync.WaitGroup
+}
+
+func NewManager(d Deps) *Manager {
+	if d.Screener == nil {
+		d.Screener = AllowAll{}
+	}
+	if d.Now == nil {
+		d.Now = time.Now
+	}
+	if d.QualityEvery == 0 {
+		// Asterisk resets a leg's RTP stats as soon as it hangs up, so the
+		// side that hangs up first only has what was sampled before.
+		d.QualityEvery = 2 * time.Second
+	}
+	return &Manager{d: d, byChannel: map[string]*call{}}
+}
+
+// Wait blocks until all calls have finished (after ctx cancellation they
+// hang up their channels and wind down).
+func (m *Manager) Wait() { m.wg.Wait() }
+
+// Dispatch handles one engine event. It must be called from a single
+// goroutine; events other than channel events and Connected are ignored.
+// ctx bounds the lifetime of calls started by this event.
+func (m *Manager) Dispatch(ctx context.Context, ev engine.Event) {
+	switch ev := ev.(type) {
+	case engine.ChannelEntered:
+		if c := m.owner(ev.Channel.ID); c != nil {
+			c.deliver(ev)
+			return
+		}
+		kind := ""
+		if len(ev.Args) > 0 {
+			kind = ev.Args[0]
+		}
+		switch kind {
+		case argInbound, argInternal:
+			m.start(ctx, kind, ev.Channel)
+		default:
+			// E.g. a leg whose call already ended: nobody owns it.
+			m.d.Log.Warn("unowned channel entered, hanging up", "channel", ev.Channel.ID, "args", ev.Args)
+			go m.d.Engine.Hangup(context.WithoutCancel(ctx), ev.Channel.ID, engine.HangupNormal)
+		}
+	case engine.ChannelStateChanged:
+		m.route(ev.Channel.ID, ev)
+	case engine.ChannelHangup:
+		m.route(ev.ChannelID, ev)
+	case engine.ChannelHangupRequested:
+		m.route(ev.ChannelID, ev)
+	case engine.ChannelLeft:
+		m.route(ev.ChannelID, ev)
+	case engine.DTMF:
+		m.route(ev.ChannelID, ev)
+	case engine.PlaybackFinished:
+		m.route(ev.ChannelID, ev)
+	case engine.Connected:
+		// Events may have been lost while disconnected: let every call
+		// verify its channels still exist.
+		// Deliver outside the lock: deliver can block on a full inbox while
+		// that call waits for the lock in track().
+		m.mu.Lock()
+		seen := map[*call]bool{}
+		for _, c := range m.byChannel {
+			seen[c] = true
+		}
+		m.mu.Unlock()
+		for c := range seen {
+			c.deliver(ev)
+		}
+	}
+}
+
+func (m *Manager) owner(channelID string) *call {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.byChannel[channelID]
+}
+
+func (m *Manager) route(channelID string, ev engine.Event) {
+	if c := m.owner(channelID); c != nil {
+		c.deliver(ev)
+	}
+}
+
+// track makes c the owner of channelID's events.
+func (m *Manager) track(channelID string, c *call) {
+	m.mu.Lock()
+	m.byChannel[channelID] = c
+	m.mu.Unlock()
+}
+
+func (m *Manager) untrackAll(c *call) {
+	m.mu.Lock()
+	for id, o := range m.byChannel {
+		if o == c {
+			delete(m.byChannel, id)
+		}
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) start(ctx context.Context, kind string, ch engine.Channel) {
+	c := newCall(ctx, m, ch)
+	m.track(ch.ID, c)
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		defer m.untrackAll(c)
+		defer func() {
+			if r := recover(); r != nil {
+				c.log.Error("call handler panicked", "panic", r)
+				c.hangupAll(engine.HangupCongestion)
+			}
+		}()
+		if kind == argInbound {
+			c.inbound()
+		} else {
+			c.fromPhone()
+		}
+	}()
+}
+
+// ActiveCalls returns the number of calls in progress.
+func (m *Manager) ActiveCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := map[*call]bool{}
+	for _, c := range m.byChannel {
+		seen[c] = true
+	}
+	return len(seen)
+}
+
+func newID() string {
+	var b [16]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}

@@ -1,0 +1,43 @@
+# Home PBX: Asterisk (SIP/media engine) + voipd (control plane).
+#
+# Both services use host networking: SIP and RTP need real addresses for
+# NAT handling and dual-stack IPv4/IPv6, and ARI/AMI stay on 127.0.0.1.
+name: voipd
+
+services:
+  asterisk:
+    build: ./asterisk
+    image: voipd-asterisk:22.11.0
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      VOIPD_UID: "65532"
+    volumes:
+      - asterisk-generated:/etc/asterisk/voipd
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show uptime"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # voipd writes the PJSIP config Asterisk needs at startup (transports
+    # must exist before PJSIP initializes its resolver).
+    depends_on:
+      - voipd
+
+  voipd:
+    build: ..
+    image: voipd:dev
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      VOIPD_GENERATED_DIR: /etc/asterisk/voipd
+      VOIPD_DB_PATH: /var/lib/voipd/voipd.db
+    volumes:
+      - asterisk-generated:/etc/asterisk/voipd
+      - voipd-data:/var/lib/voipd
+
+volumes:
+  asterisk-generated:
+  voipd-data:

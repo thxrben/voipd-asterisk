@@ -13,6 +13,8 @@ MAIL_IMAGE=${MAIL_IMAGE:-axllent/mailpit:v1.21.8}
 MQ=voipd-e2e-mosquitto
 MAIL=voipd-e2e-mailpit
 HOOK_PORT=${HOOK_PORT:-18096}
+export VOIPD_VOICEMAIL_DIR=$WORK/vm
+mkdir -p "$VOIPD_VOICEMAIL_DIR"
 
 calls_done() { [ "$(sql "SELECT count(*) FROM calls WHERE ended_at IS NOT NULL")" -ge "$1" ]; }
 last_call() { sql "SELECT $1 FROM calls ORDER BY started_at DESC LIMIT 1"; }
@@ -52,7 +54,7 @@ sql "INSERT INTO users(subject, username, name, email, role, created_at, last_lo
 export VOIPD_ADMIN_PASSWORD_HASH=$(echo "e2e-admin-password" | "$WORK/voipd" hash-password 2>/dev/null)
 export VOIPD_PUBLIC_URL=http://pbx.example.org
 start_voipd
-start_pbx
+start_pbx -v "$VOIPD_VOICEMAIL_DIR:/var/spool/asterisk/recording"
 wait_for "trunk registered at carrier" 40 registered
 wait_for "phone 10 registered" 40 phone_up kitchen
 wait_for "phone 11 registered" 40 phone_up office
@@ -134,6 +136,27 @@ check "status" answered "$(sql "SELECT status FROM calls WHERE id='$CALL'")"
 check "talked less than the caller wanted" 1 "$(sql "SELECT count(*) FROM calls WHERE id='$CALL' AND ended_at - answered_at < 30000")"
 check "hangup audited" 1 "$(sql "SELECT count(*) FROM audit_log WHERE subject='mqtt' AND action='call.hangup' AND target='$CALL'")"
 wait_for "no active calls on MQTT" 10 mq_is voipd/calls/active 0
+
+log "scenario: voicemail -> e-mail with the recording, count on MQTT"
+sql "UPDATE ring_groups SET fallback = 'voicemail', fallback_extension_id = 1 WHERE id = 1"
+peer "database put test phone10 ring" >/dev/null
+peer "database put test phone11 ring" >/dev/null
+peer "database put test callerid 01701234567" >/dev/null
+peer "channel originate Local/call@carrier-out extension s@carrier-talk" >/dev/null
+recording() { ls "$VOIPD_VOICEMAIL_DIR"/vm/10/*.wav >/dev/null 2>&1; }
+wait_for "voicemail recording started" 30 recording
+sleep 3
+peer "channel request hangup all" >/dev/null
+n=$((n + 1))
+wait_for "voicemail call finished" 20 calls_done $n
+check "call went to voicemail" voicemail "$(last_call status)"
+vm_mail() { curl -s "http://127.0.0.1:18025/api/v1/search?query=subject:Sprachnachricht" | grep -q '"messages_count":1'; }
+wait_for "voicemail mail" 15 vm_mail
+VM_MAIL=$(curl -s "http://127.0.0.1:18025/api/v1/search?query=subject:Sprachnachricht")
+check "voicemail mail to the mailbox owner" 1 "$(grep -c 'alice@example.org' <<<"$VM_MAIL")"
+check "recording attached" 1 "$(grep -c '"Attachments":1' <<<"$VM_MAIL")"
+wait_for "voicemail count on MQTT" 10 mq_is voipd/extension/10/voicemail 1
+check "voicemail count on MQTT" 1 "$(mq_retained voipd/extension/10/voicemail)"
 
 log "scenario: voipd stops -> offline on MQTT"
 stop_voipd

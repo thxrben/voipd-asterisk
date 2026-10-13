@@ -20,11 +20,14 @@ import (
 	"mime/quotedprintable"
 	"net"
 	"net/mail"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"voipd/internal/voicemail"
 
 	"voipd/internal/admin"
 	"voipd/internal/events"
@@ -319,5 +322,100 @@ func TestTestMailAndFailure(t *testing.T) {
 	raw = json.RawMessage(`{"host":"127.0.0.1","port":` + strconv.Itoa(srv.port()) + `,"security":"starttls","from":"pbx@example.org"}`)
 	if err := New().Test(context.Background(), h, raw, "me@example.org"); err == nil || !strings.Contains(err.Error(), "STARTTLS") {
 		t.Errorf("missing STARTTLS: %v", err)
+	}
+}
+
+func TestVoicemailMailWithAttachment(t *testing.T) {
+	h := setup(t)
+	dir := t.TempDir()
+	h.Voicemail = voicemail.New(h.Store, nil, h.Bus, dir, h.Log)
+	ctx := context.Background()
+	at := time.Date(2026, 10, 13, 18, 5, 0, 0, time.Local)
+	if err := h.Store.AddVoicemail(ctx, store.Voicemail{ID: "vm1", ExtensionID: 1, Caller: "+491701234567",
+		CallerName: "Oma", ReceivedAt: at, DurationMS: 7000}); err != nil {
+		t.Fatal(err)
+	}
+	audio := []byte("RIFF....WAVEfmt fake audio")
+	os.MkdirAll(filepath.Join(dir, "vm", "10"), 0o755)
+	os.WriteFile(filepath.Join(dir, "vm", "10", "vm1.wav"), audio, 0o644)
+
+	srv := newSMTP(t, false)
+	cfg := configure(t, `{"host":"127.0.0.1","port":`+strconv.Itoa(srv.port())+`,"security":"none","from":"pbx@example.org"}`)
+	m := New()
+	rctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	ready := make(chan struct{}, 1)
+	go func() {
+		defer close(done)
+		m.Run(rctx, h, cfg, func(string, string) {
+			select {
+			case ready <- struct{}{}:
+			default:
+			}
+		})
+	}()
+	defer func() { cancel(); <-done }()
+	<-ready
+
+	h.Bus.Publish(events.Event{Type: events.VoicemailNew, At: at, CallID: "c1", Data: map[string]any{
+		"id": "vm1", "extension": "10", "caller": "+491701234567", "caller_name": "Oma", "callee": "+492011111111",
+		"duration_seconds": 7.0}})
+	deadline := time.Now().Add(5 * time.Second)
+	for len(srv.mails()) < 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	mails := srv.mails()
+	if len(mails) != 1 || mails[0].to[0] != "alice@example.org" {
+		t.Fatalf("mails = %+v", mails)
+	}
+	msg, err := mail.ReadMessage(strings.NewReader(mails[0].data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, _ := new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject"))
+	if subject != "Neue Sprachnachricht von Oma" {
+		t.Errorf("subject = %q", subject)
+	}
+	mt, params, _ := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if mt != "multipart/mixed" {
+		t.Fatalf("content type = %s", mt)
+	}
+	mr := multipart.NewReader(msg.Body, params["boundary"])
+	var text string
+	var attached []byte
+	var filename string
+	for {
+		p, err := mr.NextPart()
+		if err != nil {
+			break
+		}
+		ct, ps, _ := mime.ParseMediaType(p.Header.Get("Content-Type"))
+		switch {
+		case ct == "multipart/alternative":
+			ar := multipart.NewReader(p, ps["boundary"])
+			for {
+				ap, err := ar.NextPart()
+				if err != nil {
+					break
+				}
+				if strings.HasPrefix(ap.Header.Get("Content-Type"), "text/plain") {
+					b, _ := io.ReadAll(quotedprintable.NewReader(ap))
+					text = string(b)
+				}
+			}
+		case ct == "audio/wav":
+			filename = p.FileName()
+			b, _ := io.ReadAll(base64.NewDecoder(base64.StdEncoding, p))
+			attached = b
+		}
+	}
+	for _, want := range []string{"Von:   Oma (0170 1234567)", "Länge: 0:07 min", "(Mailbox 10)", "angehängt",
+		"https://pbx.example.org/voicemail"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text lacks %q:\n%s", want, text)
+		}
+	}
+	if string(attached) != string(audio) || filename != "Sprachnachricht-2026-10-13-1805.wav" {
+		t.Errorf("attachment %q = %q", filename, attached)
 	}
 }

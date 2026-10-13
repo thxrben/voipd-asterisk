@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
@@ -23,6 +25,13 @@ import (
 // Message is a rendered mail.
 type Message struct {
 	Subject, Text, HTML string
+	Attachments         []Attachment
+}
+
+// Attachment is a file sent with a mail.
+type Attachment struct {
+	Name, Type string
+	Data       []byte
 }
 
 // tlsConfig is overridable in tests (self-signed servers).
@@ -96,7 +105,8 @@ func Send(ctx context.Context, c Config, to []string, m Message, now time.Time) 
 	return cl.Quit()
 }
 
-// build renders a multipart/alternative message (text + HTML).
+// build renders a multipart/alternative message (text + HTML), wrapped in
+// multipart/mixed when there are attachments.
 func build(from *mail.Address, to []string, m Message, now time.Time) []byte {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -110,6 +120,29 @@ func build(from *mail.Address, to []string, m Message, now time.Time) []byte {
 		qw.Close()
 	}
 	mw.Close()
+	contentType := "multipart/alternative; boundary=" + mw.Boundary()
+	if len(m.Attachments) > 0 {
+		var mixed bytes.Buffer
+		xw := multipart.NewWriter(&mixed)
+		alt, _ := xw.CreatePart(textproto.MIMEHeader{"Content-Type": {contentType}})
+		alt.Write(body.Bytes())
+		for _, a := range m.Attachments {
+			disp := mime.FormatMediaType("attachment", map[string]string{"filename": a.Name})
+			aw, _ := xw.CreatePart(textproto.MIMEHeader{
+				"Content-Type":              {a.Type},
+				"Content-Disposition":       {disp},
+				"Content-Transfer-Encoding": {"base64"},
+			})
+			enc := base64.StdEncoding.EncodeToString(a.Data)
+			for len(enc) > 76 {
+				io.WriteString(aw, enc[:76]+"\r\n")
+				enc = enc[76:]
+			}
+			io.WriteString(aw, enc+"\r\n")
+		}
+		xw.Close()
+		body, contentType = mixed, "multipart/mixed; boundary="+xw.Boundary()
+	}
 
 	var id [12]byte
 	rand.Read(id[:])
@@ -126,7 +159,7 @@ func build(from *mail.Address, to []string, m Message, now time.Time) []byte {
 	hdr("Message-ID", "<"+hex.EncodeToString(id[:])+"@"+domain+">")
 	hdr("Auto-Submitted", "auto-generated")
 	hdr("MIME-Version", "1.0")
-	hdr("Content-Type", "multipart/alternative; boundary="+mw.Boundary())
+	hdr("Content-Type", contentType)
 	msg.WriteString("\r\n")
 	msg.Write(body.Bytes())
 	return msg.Bytes()

@@ -397,6 +397,8 @@ export interface NotifyConfig {
   blocked_calls: boolean
   trunk_alerts: boolean
   admin_to: string[]
+  voicemail: boolean
+  voicemail_attach: boolean
 }
 
 export interface WebhookEndpoint {

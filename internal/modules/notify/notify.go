@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/mail"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -37,6 +38,9 @@ type Config struct {
 	BlockedCalls bool     `json:"blocked_calls"` // to the admins
 	TrunkAlerts  bool     `json:"trunk_alerts"`  // line down / back up, to the admins
 	AdminTo      []string `json:"admin_to"`      // extra admin addresses
+
+	Voicemail       bool `json:"voicemail"`        // new messages to the mailbox owner (+ missed_to)
+	VoicemailAttach bool `json:"voicemail_attach"` // with the recording attached
 }
 
 type Module struct {
@@ -52,7 +56,7 @@ func (*Module) Name() string      { return "notify" }
 func (*Module) Secrets() []string { return []string{"password"} }
 
 func (*Module) Configure(raw json.RawMessage) (any, error) {
-	c := Config{Security: SecuritySTARTTLS, MissedCalls: true}
+	c := Config{Security: SecuritySTARTTLS, MissedCalls: true, Voicemail: true, VoicemailAttach: true}
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, admin.Errors{"config": "invalid: " + err.Error()}
 	}
@@ -114,6 +118,9 @@ type job struct {
 	to  []string
 	msg Message
 }
+
+// maxAttachment: larger recordings are only linked.
+const maxAttachment = 10 << 20
 
 func (m *Module) Run(ctx context.Context, h *modules.Host, cfg any, report modules.Reporter) error {
 	c := cfg.(Config)
@@ -186,6 +193,27 @@ func (m *Module) compose(ctx context.Context, h *modules.Host, c Config, ev even
 			h.Log.Error("owner addresses", "err", err)
 		}
 		return merge(to, c.MissedTo), render(h, missedTmpl, ev), true
+	case events.VoicemailNew:
+		if !c.Voicemail {
+			return nil, Message{}, false
+		}
+		ext, _ := ev.Data["extension"].(string)
+		to, err := h.Store.OwnerEmails(ctx, []string{ext})
+		if err != nil {
+			h.Log.Error("owner addresses", "err", err)
+		}
+		var files []Attachment
+		if c.VoicemailAttach {
+			files = m.voicemailAudio(ctx, h, ev)
+		}
+		msg := render(h, voicemailTmpl, ev, func(f *fields) {
+			f.Attached = len(files) > 0
+			if h.PublicURL != "" {
+				f.Link = strings.TrimRight(h.PublicURL, "/") + "/voicemail"
+			}
+		})
+		msg.Attachments = files
+		return merge(to, c.MissedTo), msg, true
 	case events.CallBlocked:
 		if !c.BlockedCalls {
 			return nil, Message{}, false
@@ -238,4 +266,27 @@ func (m *Module) Test(ctx context.Context, h *modules.Host, raw json.RawMessage,
 	}
 	msg := render(h, testTmpl, events.Event{Type: "test", At: h.Now()})
 	return Send(ctx, cfg.(Config), []string{to}, msg, h.Now())
+}
+
+// voicemailAudio attaches the message's recording, if it is not too big.
+func (m *Module) voicemailAudio(ctx context.Context, h *modules.Host, ev events.Event) []Attachment {
+	id, _ := ev.Data["id"].(string)
+	if h.Voicemail == nil || id == "" {
+		return nil
+	}
+	v, err := h.Store.Voicemail(ctx, id)
+	if err != nil {
+		return nil
+	}
+	path := h.Voicemail.MessagePath(v)
+	if st, err := os.Stat(path); err != nil || st.Size() > maxAttachment {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		h.Log.Warn("voicemail attachment", "err", err)
+		return nil
+	}
+	name := "Sprachnachricht-" + v.ReceivedAt.Local().Format("2006-01-02-1504") + ".wav"
+	return []Attachment{{Name: name, Type: "audio/wav", Data: data}}
 }

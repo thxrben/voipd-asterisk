@@ -137,7 +137,7 @@ func run() error {
 	statistics := stats.New(st.DB)
 	mods := modules.NewManager(&modules.Host{
 		Bus: bus, Store: st, Screening: screen, Numbers: nums, Calls: calls, Phones: eng, Trunks: sup,
-		Stats: statistics, PublicURL: cfg.HTTP.PublicURL, Log: log.With("component", "modules"),
+		Stats: statistics, Voicemail: vm, PublicURL: cfg.HTTP.PublicURL, Log: log.With("component", "modules"),
 	}, mqtt.New(), webhook.New(), notify.New())
 
 	var proxies []netip.Prefix

@@ -62,6 +62,24 @@ Details: {{.Link}}
 <table cellpadding="3"><tr><td>Von</td><td><b>{{.Caller}}</b>{{if .CallerNumber}} ({{.CallerNumber}}){{end}}</td></tr>
 <tr><td>An</td><td>{{.Callee}}</td></tr><tr><td>Zeit</td><td>{{.Time}}</td></tr><tr><td>Grund</td><td>{{.Reason}}</td></tr></table>`)
 
+	voicemailTmpl = newTmpl(
+		`Neue Sprachnachricht von {{.Caller}}`,
+		`Neue Sprachnachricht
+
+Von:   {{.Caller}}{{if .CallerNumber}} ({{.CallerNumber}}){{end}}
+An:    {{.Callee}}{{if .Extensions}} (Mailbox {{.Extensions}}){{end}}
+Zeit:  {{.Time}}
+Länge: {{.Duration}}
+{{if .Attached}}
+Die Nachricht ist als Audiodatei angehängt.{{end}}{{if .Link}}
+Anhören: {{.Link}}
+{{end}}`,
+		`<h2 style="margin:0 0 .5em">Neue Sprachnachricht</h2>
+<table cellpadding="3"><tr><td>Von</td><td><b>{{.Caller}}</b>{{if .CallerNumber}} ({{.CallerNumber}}){{end}}</td></tr>
+<tr><td>An</td><td>{{.Callee}}{{if .Extensions}} (Mailbox {{.Extensions}}){{end}}</td></tr>
+<tr><td>Zeit</td><td>{{.Time}}</td></tr><tr><td>Länge</td><td>{{.Duration}}</td></tr></table>
+{{if .Attached}}<p>Die Nachricht ist als Audiodatei angehängt.</p>{{end}}`)
+
 	trunkDownTmpl = newTmpl(
 		`Leitung gestört: {{.Trunk}} {{.Number}}`,
 		`Die Leitung {{.Trunk}} ({{.Number}}) ist seit {{.Time}} nicht registriert.
@@ -92,12 +110,14 @@ Ausfallzeit: {{.Downtime}}
 type fields struct {
 	Caller, CallerNumber, Callee, Time, Extensions, Reason string
 	Trunk, Number, Downtime                                string
-	Link                                                   string
+	Link, Duration                                         string
+	Attached                                               bool
 }
 
 var weekdays = [...]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"}
 
-func render(h *modules.Host, t tmpl, ev events.Event) Message {
+// render fills a template from an event; extra may adjust the fields.
+func render(h *modules.Host, t tmpl, ev events.Event, extra ...func(*fields)) Message {
 	str := func(k string) string { s, _ := ev.Data[k].(string); return s }
 	display := func(e164 string) string {
 		if e164 == "" {
@@ -130,6 +150,16 @@ func render(h *modules.Host, t tmpl, ev events.Event) Message {
 	}
 	if ev.CallID != "" && h.PublicURL != "" {
 		f.Link = strings.TrimRight(h.PublicURL, "/") + "/calls/" + ev.CallID
+	}
+	if ext := str("extension"); ext != "" {
+		f.Extensions = ext
+	}
+	if s, ok := ev.Data["duration_seconds"].(float64); ok {
+		d := int(s + 0.5)
+		f.Duration = fmt.Sprintf("%d:%02d min", d/60, d%60)
+	}
+	for _, x := range extra {
+		x(&f)
 	}
 	var subj, text, html bytes.Buffer
 	t.subject.Execute(&subj, f)

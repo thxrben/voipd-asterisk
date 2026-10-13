@@ -202,6 +202,7 @@ func TestStateEventsAndDiscovery(t *testing.T) {
 	b.wait("voipd/extension/10/registered", "ON")
 	b.wait("voipd/extension/11/registered", "OFF")
 	b.wait("voipd/extension/10/dnd", "OFF")
+	b.wait("voipd/extension/10/voicemail", "0")
 	b.wait("voipd/calls/active", "1")
 	b.wait("voipd/blocking/anonymous", "OFF")
 	b.wait("voipd/blocking/paused", "OFF")
@@ -223,6 +224,12 @@ func TestStateEventsAndDiscovery(t *testing.T) {
 	}
 	b.wait("homeassistant/binary_sensor/voipd/line_492011111111/config", "*")
 	b.wait("homeassistant/sensor/voipd/blocked_today/config", "*")
+	b.wait("homeassistant/sensor/voipd/voicemail_10/config", "*")
+
+	// A new message updates the count.
+	e.h.Store.AddVoicemail(context.Background(), store.Voicemail{ID: "m1", ExtensionID: 1, ReceivedAt: time.Now()})
+	e.h.Bus.Publish(events.Event{Type: events.VoicemailCount, At: time.Now(), Data: map[string]any{"extension": "10"}})
+	b.wait("voipd/extension/10/voicemail", "1")
 
 	// Events are forwarded; the last caller is tracked.
 	e.h.Bus.Publish(events.Event{Type: events.CallIncoming, At: time.Now(), CallID: "c2",

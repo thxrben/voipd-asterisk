@@ -35,6 +35,9 @@ func (r *run) entities(exts []store.Extension) []entity {
 	for _, e := range exts {
 		toggle("dnd_"+e.Number, "Do not disturb "+e.Number+" "+e.Name, "extension/"+e.Number+"/dnd",
 			"extension/"+e.Number+"/dnd/set", "mdi:phone-off", "ON", "OFF")
+		out = append(out, entity{"sensor", "voicemail_" + e.Number, map[string]any{
+			"name": "New voicemails " + e.Number + " " + e.Name, "state_topic": base + "/extension/" + e.Number + "/voicemail",
+			"icon": "mdi:voicemail", "state_class": "measurement"}})
 		out = append(out, entity{"binary_sensor", "registered_" + e.Number, map[string]any{
 			"name": "Phone " + e.Number + " " + e.Name, "state_topic": base + "/extension/" + e.Number + "/registered",
 			"payload_on": "ON", "payload_off": "OFF", "device_class": "connectivity", "entity_category": "diagnostic"}})

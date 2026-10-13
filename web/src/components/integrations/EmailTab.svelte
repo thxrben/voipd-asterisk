@@ -17,6 +17,7 @@
   const defaults: NotifyConfig = {
     host: '', port: 587, security: 'starttls', username: '', password: '', from: '',
     missed_calls: true, missed_to: [], blocked_calls: false, trunk_alerts: true, admin_to: [],
+    voicemail: true, voicemail_attach: true,
   }
   const ports = { none: 25, starttls: 587, tls: 465 }
 
@@ -110,7 +111,15 @@
     <Field label="Missed calls to the owners of the phones that rang" inline>
       <input type="checkbox" bind:checked={cfg.missed_calls} />
     </Field>
-    <Field label="Missed calls also to" error={save.fields['missed_to']} help="One address per line">
+    <Field label="New voicemail messages to the mailbox owner" inline>
+      <input type="checkbox" bind:checked={cfg.voicemail} />
+    </Field>
+    {#if cfg.voicemail}
+      <Field label="Attach the recording (WAV)" inline>
+        <input type="checkbox" bind:checked={cfg.voicemail_attach} />
+      </Field>
+    {/if}
+    <Field label="Missed calls and voicemail also to" error={save.fields['missed_to']} help="One address per line">
       <textarea rows="2" bind:value={missedTo}></textarea>
     </Field>
     <Field label="Line outages and recovery to the admins" inline>

@@ -7,6 +7,7 @@
 //	line/<number>/state             up | down; line/<number>/attributes (JSON)
 //	extension/<num>/dnd             ON | OFF
 //	extension/<num>/registered      ON | OFF
+//	extension/<num>/voicemail       number of new voicemail messages
 //	calls/active                    number of calls in progress; calls/active/list (JSON)
 //	calls/last_caller               last inbound caller (name or number)
 //	stats/today                     JSON (total, inbound, answered, missed, blocked, ...)
@@ -267,6 +268,11 @@ func (r *run) refresh(ctx context.Context) {
 	for _, e := range exts {
 		r.set(ctx, "extension/"+e.Number+"/dnd", onOff(e.DND))
 		r.set(ctx, "extension/"+e.Number+"/registered", onOff(registered[e.SIPUsername]))
+	}
+	if boxes, err := h.Store.MailboxCounts(ctx); err == nil {
+		for _, b := range boxes {
+			r.set(ctx, "extension/"+b.Extension+"/voicemail", strconv.Itoa(b.New))
+		}
 	}
 	if h.Calls != nil {
 		active := h.Calls.ActiveList()

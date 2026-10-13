@@ -24,6 +24,7 @@ import (
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
+	"voipd/internal/voicemail"
 )
 
 // Module is a built-in integration.
@@ -82,6 +83,7 @@ type Host struct {
 	Phones    Phones
 	Trunks    Trunks
 	Stats     *stats.Stats
+	Voicemail *voicemail.Service // nil in tests without voicemail
 	PublicURL string
 	Log       *slog.Logger
 	Now       func() time.Time

@@ -152,6 +152,7 @@ base topic `voipd`:
 | `status` | `online` / `offline` (last will) |
 | `line/<number>/state`, `…/attributes` | `up` / `down`, JSON details |
 | `extension/<ext>/dnd`, `extension/<ext>/registered` | `ON` / `OFF` |
+| `extension/<ext>/voicemail` | number of new voicemail messages |
 | `calls/active`, `calls/active/list`, `calls/last_caller` | count, JSON, name or number |
 | `stats/today` | JSON: `total`, `inbound`, `answered`, `missed`, `blocked`, … |
 | `blocking/anonymous`, `blocking/paused` | `ON` / `OFF` |
@@ -181,8 +182,9 @@ ok = hmac.compare_digest(expected, request.headers["X-Voipd-Signature"]) and abs
 
 **E-mail** (SMTP with STARTTLS, TLS or plain on a trusted network): missed
 calls go to the owners of the phones that rang (their e-mail address comes
-from authentik) and to extra addresses; line outages/recovery and,
-optionally, blocked calls go to the admins. Mails are in German and link to
+from authentik) and to extra addresses; new voicemail messages go to the
+mailbox owner, with the recording attached (optional, up to 10 MB); line
+outages/recovery and, optionally, blocked calls go to the admins. Mails are in German and link to
 the call in the web UI (`VOIPD_PUBLIC_URL`).
 
 ## Trunk reliability

@@ -133,6 +133,7 @@ func (c *call) talk(b *leg) {
 		c.rec.AnsweredBy = b.ext.Number
 	}
 	c.save()
+	c.snapshot(nil)
 
 	if c.a.state != legUp {
 		if err := c.act("answer", func(ctx context.Context) error { return c.d.Engine.Answer(ctx, c.a.id) }); err != nil {

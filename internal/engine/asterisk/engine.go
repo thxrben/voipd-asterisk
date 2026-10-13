@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ type Engine struct {
 	events chan engine.Event
 
 	mu            sync.Mutex
+	connected     bool
 	ami           *amiConn          // nil while disconnected
 	clientURIs    map[string]string // registration client_uri -> registration id
 	reloadPending bool
@@ -119,6 +121,14 @@ func (e *Engine) session(ctx context.Context) error {
 		}
 	}
 
+	e.mu.Lock()
+	e.connected = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		e.connected = false
+		e.mu.Unlock()
+	}()
 	e.log.Info("connected to asterisk", "ari", e.cfg.ARIURL, "ami", e.cfg.AMIAddr)
 	e.emit(ctx, engine.Connected{Meta: engine.At(time.Now())})
 
@@ -554,6 +564,73 @@ func (e *Engine) RestartWhenIdle(ctx context.Context) error {
 		}
 	}
 	return err
+}
+
+func (e *Engine) Connected() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.connected
+}
+
+func (e *Engine) Info(ctx context.Context) (engine.Info, error) {
+	var info engine.Info
+	ami, err := e.amiConn()
+	if err != nil {
+		return info, err
+	}
+	m, _, err := ami.Action(ctx, "CoreSettings")
+	if err != nil {
+		return info, err
+	}
+	info.Version = m.Get("AsteriskVersion")
+	if m, _, err = ami.Action(ctx, "CoreStatus"); err == nil {
+		info.Calls, _ = strconv.Atoi(m.Get("CoreCurrentCalls"))
+	}
+	// CoreStartupTime is in the container's local zone; the uptime command
+	// is zone-independent.
+	if m, _, err = ami.Action(ctx, "Command", "Command", "core show uptime seconds"); err == nil {
+		for _, line := range strings.Split(m.Get("Output"), "\n") {
+			if v, ok := strings.CutPrefix(line, "System uptime: "); ok {
+				secs, _ := strconv.Atoi(strings.TrimSpace(v))
+				info.Uptime = time.Duration(secs) * time.Second
+			}
+		}
+	}
+	return info, nil
+}
+
+func (e *Engine) Contacts(ctx context.Context) ([]engine.Contact, error) {
+	ami, err := e.amiConn()
+	if err != nil {
+		return nil, err
+	}
+	_, list, err := ami.Action(ctx, "PJSIPShowContacts")
+	if err != nil {
+		return nil, err
+	}
+	var out []engine.Contact
+	for _, m := range list {
+		if m.Get("Event") != "ContactList" || strings.HasPrefix(m.Get("Endpoint"), "trunk-") {
+			continue
+		}
+		usec, _ := strconv.ParseInt(m.Get("RoundtripUsec"), 10, 64)
+		exp, _ := strconv.ParseInt(m.Get("ExpirationTime"), 10, 64)
+		c := engine.Contact{
+			Endpoint:  m.Get("Endpoint"),
+			URI:       m.Get("Uri"),
+			UserAgent: m.Get("UserAgent"),
+			Status:    m.Get("Status"),
+			RTT:       time.Duration(usec) * time.Microsecond,
+		}
+		if exp > 0 {
+			c.Expires = time.Unix(exp, 0)
+		}
+		if a := m.Get("ViaAddr"); a != "" {
+			c.Addr = net.JoinHostPort(a, m.Get("ViaPort"))
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 // Reregister forces a fresh registration: unregister (which also resets a

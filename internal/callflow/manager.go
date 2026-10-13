@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -48,7 +49,23 @@ type Manager struct {
 	mu        sync.Mutex
 	byChannel map[string]*call
 	trunkOf   map[*call]string // trunk name of calls using a trunk
+	active    map[*call]ActiveCall
 	wg        sync.WaitGroup
+}
+
+// ActiveCall is a read-only snapshot of a call in progress, for the UI.
+type ActiveCall struct {
+	ID         string    `json:"id"`
+	Direction  string    `json:"direction"`
+	Status     string    `json:"status"` // ringing | answered | blocked
+	Caller     string    `json:"caller"`
+	CallerName string    `json:"caller_name"`
+	Callee     string    `json:"callee"`
+	Trunk      string    `json:"trunk,omitempty"`
+	Ringing    []string  `json:"ringing,omitempty"` // extension numbers being rung
+	AnsweredBy string    `json:"answered_by,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	AnsweredAt time.Time `json:"answered_at"`
 }
 
 func NewManager(d Deps) *Manager {
@@ -63,7 +80,8 @@ func NewManager(d Deps) *Manager {
 		// side that hangs up first only has what was sampled before.
 		d.QualityEvery = 2 * time.Second
 	}
-	return &Manager{d: d, byChannel: map[string]*call{}, trunkOf: map[*call]string{}}
+	return &Manager{d: d, byChannel: map[string]*call{}, trunkOf: map[*call]string{},
+		active: map[*call]ActiveCall{}}
 }
 
 // Wait blocks until all calls have finished (after ctx cancellation they
@@ -148,9 +166,28 @@ func (m *Manager) setTrunk(c *call, trunk string) {
 	m.mu.Unlock()
 }
 
+func (m *Manager) setActive(c *call, a ActiveCall) {
+	m.mu.Lock()
+	m.active[c] = a
+	m.mu.Unlock()
+}
+
+// ActiveList returns snapshots of all calls in progress, oldest first.
+func (m *Manager) ActiveList() []ActiveCall {
+	m.mu.Lock()
+	out := make([]ActiveCall, 0, len(m.active))
+	for _, a := range m.active {
+		out = append(out, a)
+	}
+	m.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.Before(out[j].StartedAt) })
+	return out
+}
+
 func (m *Manager) untrackAll(c *call) {
 	m.mu.Lock()
 	delete(m.trunkOf, c)
+	delete(m.active, c)
 	for id, o := range m.byChannel {
 		if o == c {
 			delete(m.byChannel, id)

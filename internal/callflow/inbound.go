@@ -80,6 +80,7 @@ func (c *call) inbound() {
 	}
 
 	c.publish(events.CallRinging, map[string]any{"group": group.Name, "extensions": extNumbers(targets)})
+	c.snapshot(extNumbers(targets))
 	out, winner, _ := c.dial(targets, time.Duration(group.RingTimeout)*time.Second, nil)
 	switch out {
 	case outAnswered:
@@ -126,6 +127,7 @@ func (c *call) stealthBlock(reason string) {
 	c.rec.Status = store.CallBlocked
 	c.rec.BlockReason = reason
 	c.save()
+	c.snapshot(nil)
 	c.publish(events.CallBlocked, map[string]any{"reason": reason})
 	c.log.Info("call blocked (stealth)", "reason", reason)
 	c.waitForCallerHangup(stealthMaxRing)

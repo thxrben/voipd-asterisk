@@ -533,3 +533,49 @@ func TestLoadCountsCallsPerTrunk(t *testing.T) {
 		t.Errorf("load = %d %v, want 2 calls, 1 on telekom", total, byTrunk)
 	}
 }
+
+func (f *fakeEngine) Connected() bool                                    { return true }
+func (f *fakeEngine) Info(context.Context) (engine.Info, error)          { return engine.Info{}, nil }
+func (f *fakeEngine) Contacts(context.Context) ([]engine.Contact, error) { return nil, nil }
+
+func TestActiveListSnapshots(t *testing.T) {
+	e := newEnv(t, 30, "hangup")
+	e.inbound("A", "01701234567")
+	e.eng.expect(t, "ring A")
+	e.eng.expect(t, "originate kitchen")
+	e.eng.expect(t, "originate office")
+
+	waitActive := func(check func([]ActiveCall) bool) []ActiveCall {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			l := e.m.ActiveList()
+			if check(l) {
+				return l
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("active list never matched: %+v", l)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	l := waitActive(func(l []ActiveCall) bool { return len(l) == 1 && len(l[0].Ringing) == 2 })
+	if l[0].Caller != "+491701234567" || l[0].Status != "ringing" || l[0].Trunk != "telekom" ||
+		strings.Join(l[0].Ringing, ",") != "10,11" {
+		t.Errorf("ringing snapshot = %+v", l[0])
+	}
+
+	office := e.eng.originated(t, "office").ID
+	e.eng.state(office, "Up")
+	e.eng.expect(t, "hangup <leg:kitchen> answered_elsewhere")
+	l = waitActive(func(l []ActiveCall) bool { return len(l) == 1 && l[0].Status == "answered" })
+	if l[0].AnsweredBy != "11" || len(l[0].Ringing) != 0 || l[0].AnsweredAt.IsZero() {
+		t.Errorf("answered snapshot = %+v", l[0])
+	}
+
+	e.eng.hangup("A", engine.CauseNormal)
+	e.eng.hangup(office, engine.CauseNormal)
+	e.eng.hangup(e.eng.originated(t, "kitchen").ID, 26)
+	e.events(t)
+	waitActive(func(l []ActiveCall) bool { return len(l) == 0 })
+}

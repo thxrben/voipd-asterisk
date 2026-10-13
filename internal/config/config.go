@@ -8,6 +8,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ type Config struct {
 	Numbers  Numbers  `yaml:"numbers"`
 	Network  Network  `yaml:"network"`
 	Trunks   Trunks   `yaml:"trunks"`
+	Auth     Auth     `yaml:"auth"`
 	LogLevel string   `yaml:"log_level"`
 }
 
@@ -80,6 +82,28 @@ type Store struct {
 
 type HTTP struct {
 	Listen string `yaml:"listen"`
+	// PublicURL is how users reach the UI, e.g. https://voip.example.com.
+	// Used for the OIDC redirect URL and secure cookies.
+	PublicURL string `yaml:"public_url"`
+	// TrustedProxies may set X-Forwarded-For (CIDRs), e.g. a reverse proxy.
+	TrustedProxies []string `yaml:"trusted_proxies"`
+}
+
+// Auth configures web UI login. OIDC (e.g. authentik) is the normal way;
+// the local admin is a break-glass account, enabled only if a hash is set.
+type Auth struct {
+	OIDCIssuer       string `yaml:"oidc_issuer"`
+	OIDCClientID     string `yaml:"oidc_client_id"`
+	OIDCClientSecret string `yaml:"oidc_client_secret"`
+	// GroupsClaim is the ID token / userinfo claim listing the user's groups.
+	GroupsClaim string `yaml:"groups_claim"`
+	AdminGroup  string `yaml:"admin_group"`
+	UserGroup   string `yaml:"user_group"`
+	// AdminPasswordHash enables the local "admin" login (argon2id, see
+	// "voipd hash-password").
+	AdminPasswordHash string        `yaml:"admin_password_hash"`
+	SessionIdle       time.Duration `yaml:"session_idle"`
+	SessionMax        time.Duration `yaml:"session_max"`
 }
 
 type Numbers struct {
@@ -102,7 +126,14 @@ func Default() Config {
 			ReconnectMin: time.Second,
 			ReconnectMax: 30 * time.Second,
 		},
-		Store:   Store{Path: "/var/lib/voipd/voipd.db"},
+		Store: Store{Path: "/var/lib/voipd/voipd.db"},
+		Auth: Auth{
+			GroupsClaim: "groups",
+			AdminGroup:  "voipd-admins",
+			UserGroup:   "voipd-users",
+			SessionIdle: 12 * time.Hour,
+			SessionMax:  7 * 24 * time.Hour,
+		},
 		HTTP:    HTTP{Listen: "[::]:8080"},
 		Numbers: Numbers{Country: "DE"},
 		Trunks: Trunks{
@@ -159,6 +190,15 @@ func applyEnv(c *Config) {
 		"VOIPD_TLS_CERT_FILE": &c.Network.TLSCertFile,
 		"VOIPD_TLS_KEY_FILE":  &c.Network.TLSKeyFile,
 		"VOIPD_DNS_SERVER":    &c.Network.DNSServer,
+
+		"VOIPD_PUBLIC_URL":          &c.HTTP.PublicURL,
+		"VOIPD_OIDC_ISSUER":         &c.Auth.OIDCIssuer,
+		"VOIPD_OIDC_CLIENT_ID":      &c.Auth.OIDCClientID,
+		"VOIPD_OIDC_CLIENT_SECRET":  &c.Auth.OIDCClientSecret,
+		"VOIPD_OIDC_GROUPS_CLAIM":   &c.Auth.GroupsClaim,
+		"VOIPD_ADMIN_GROUP":         &c.Auth.AdminGroup,
+		"VOIPD_USER_GROUP":          &c.Auth.UserGroup,
+		"VOIPD_ADMIN_PASSWORD_HASH": &c.Auth.AdminPasswordHash,
 	}
 	for k, p := range env {
 		if v, ok := os.LookupEnv(k); ok {
@@ -191,6 +231,23 @@ func (c Config) validate() error {
 	}
 	if _, err := c.Network.Parsed(); err != nil {
 		return err
+	}
+	if c.HTTP.PublicURL != "" {
+		u, err := url.Parse(c.HTTP.PublicURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("http.public_url: %q is not an absolute http(s) URL", c.HTTP.PublicURL)
+		}
+	}
+	if c.Auth.OIDCIssuer != "" && (c.Auth.OIDCClientID == "" || c.HTTP.PublicURL == "") {
+		return fmt.Errorf("auth: oidc_issuer requires oidc_client_id and http.public_url")
+	}
+	for _, p := range c.HTTP.TrustedProxies {
+		if _, err := netip.ParsePrefix(p); err != nil {
+			return fmt.Errorf("http.trusted_proxies: %w", err)
+		}
+	}
+	if c.Auth.SessionIdle <= 0 || c.Auth.SessionMax < c.Auth.SessionIdle {
+		return fmt.Errorf("auth: invalid session lifetimes")
 	}
 	t := c.Trunks
 	for name, d := range map[string]time.Duration{"grace": t.Grace, "first_retry": t.FirstRetry,

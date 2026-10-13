@@ -3,17 +3,23 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"voipd/internal/auth"
 	"voipd/internal/callflow"
 	"voipd/internal/config"
 	"voipd/internal/engine"
@@ -21,11 +27,21 @@ import (
 	"voipd/internal/events"
 	"voipd/internal/numbers"
 	"voipd/internal/pbx"
+	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
+	"voipd/internal/web"
+	webui "voipd/web"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
+		if err := hashPassword(); err != nil {
+			fmt.Fprintln(os.Stderr, "voipd:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "voipd:", err)
 		os.Exit(1)
@@ -97,22 +113,96 @@ func run() error {
 		return fmt.Errorf("apply sip config: %w", err)
 	}
 
-	log.Info("voipd starting", "db", cfg.Store.Path)
+	authSvc, err := auth.New(st, cfg.Auth, cfg.HTTP.PublicURL, log.With("component", "auth"))
+	if err != nil {
+		return err
+	}
+	if !authSvc.OIDCEnabled() && !authSvc.LocalEnabled() {
+		log.Warn("no web login configured: set VOIPD_OIDC_* (authentik) or VOIPD_ADMIN_PASSWORD_HASH")
+	}
+	var proxies []netip.Prefix
+	for _, p := range cfg.HTTP.TrustedProxies {
+		proxies = append(proxies, netip.MustParsePrefix(p)) // validated by config.Load
+	}
+	srv := &http.Server{
+		Addr: cfg.HTTP.Listen,
+		Handler: web.New(web.Deps{
+			Store: st, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
+			Stats: stats.New(st.DB), Log: log.With("component", "web"), UI: webui.FS(),
+			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
+		}),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+
+	log.Info("voipd starting", "db", cfg.Store.Path, "http", cfg.HTTP.Listen)
 	var wg sync.WaitGroup
 	engDone := make(chan error, 1)
 	go func() { engDone <- eng.Run(ctx) }()
-	wg.Add(3)
+	httpDone := make(chan error, 1)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			httpDone <- fmt.Errorf("http: %w", err)
+			stop() // the UI is essential; fail loudly instead of running headless
+			return
+		}
+		httpDone <- nil
+	}()
+	wg.Add(4)
+	go func() { defer wg.Done(); cleanupLoop(ctx, authSvc) }()
 	go func() { defer wg.Done(); superviseLoop(ctx, sup, cfg.Trunks, log) }()
 	go func() { defer wg.Done(); watchNetwork(ctx, cfg, conf, sup, log) }()
 	go func() { defer wg.Done(); watchDNS(ctx, cfg, conf, sup, log) }()
 
 	dispatch(ctx, eng, calls, sup)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx) // SSE streams end with the request contexts
 	calls.Wait()
 	wg.Wait()
+	if err := <-httpDone; err != nil {
+		return err
+	}
 	if err := <-engDone; err != nil && ctx.Err() == nil {
 		return err
 	}
 	log.Info("voipd stopped")
+	return nil
+}
+
+// cleanupLoop removes expired web sessions every hour.
+func cleanupLoop(ctx context.Context, a *auth.Service) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		a.Cleanup(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// hashPassword implements "voipd hash-password": reads a password from
+// stdin and prints its argon2id hash for VOIPD_ADMIN_PASSWORD_HASH.
+func hashPassword() error {
+	fmt.Fprint(os.Stderr, "Password: ")
+	r := bufio.NewReader(os.Stdin)
+	pw, err := r.ReadString('\n')
+	if err != nil && pw == "" {
+		return err
+	}
+	pw = strings.TrimRight(pw, "\r\n")
+	if len(pw) < 12 {
+		return errors.New("use at least 12 characters")
+	}
+	h, err := auth.HashPassword(pw)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stderr)
+	fmt.Println(h)
 	return nil
 }
 

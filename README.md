@@ -20,7 +20,8 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | German number normalization (`+49`, `0049`, `0…`, local, short codes) | done |
 | Call history with per-leg quality (codec, loss, jitter, RTT, MOS) | done |
 | Trunk supervisor: outage detection, escalation, IP/DNS watchers | done |
-| Web UI + OIDC, blocklists, modules (MQTT, webhooks), voicemail, directory, backups | planned |
+| Web API: OIDC login (authentik), sessions, roles, call log, statistics, live events | done |
+| Web UI, blocklists, modules (MQTT, webhooks), voicemail, directory, backups | in progress |
 
 ## Run
 
@@ -52,6 +53,20 @@ database.
 | `VOIPD_PUBLIC_IP_URL` | … or a URL returning it (e.g. `https://api.ipify.org`), checked periodically |
 | `VOIPD_DNS_SERVER` | `host:port` resolver for voipd's registrar DNS checks |
 | `VOIPD_DB_PATH`, `VOIPD_LOG_LEVEL` | database path, `debug`/`info`/`warn` |
+| `VOIPD_HTTP_LISTEN`, `VOIPD_PUBLIC_URL` | web UI listen address (default `[::]:8080`) and the URL users open |
+| `VOIPD_OIDC_ISSUER`, `…_CLIENT_ID`, `…_CLIENT_SECRET` | authentik/OIDC login; redirect URI is `<public url>/auth/callback` |
+| `VOIPD_ADMIN_GROUP`, `VOIPD_USER_GROUP` | groups granting admin / user access (default `voipd-admins` / `voipd-users`) |
+| `VOIPD_ADMIN_PASSWORD_HASH` | enables a break-glass local `admin` login; create with `voipd hash-password` |
+
+## Web login (authentik)
+
+Create an OAuth2/OpenID provider in authentik (confidential client, signing
+key set, redirect URI `https://<your voipd>/auth/callback`) and an
+application for it; its issuer URL is shown on the provider page. Put users
+into `voipd-admins` (everything) or `voipd-users` (own extensions only:
+own call history, live calls, later voicemail). The groups must be in the
+token: the default `profile` scope mapping includes them. Members of
+neither group are denied.
 
 Supervisor timings (`trunks:` in YAML) default to production values:
 `grace: 20s`, `first_retry: 45s`, `max_backoff: 10m`,

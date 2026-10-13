@@ -29,6 +29,8 @@ wait_for "trunk registered at carrier" 40 registered
 wait_for "phone 10 registered" 40 phone_up kitchen
 wait_for "phone 11 registered" 40 phone_up office
 registered && ok "trunk registered at carrier"
+check "web API up" ok "$(curl -s http://127.0.0.1:$HTTP_PORT/healthz)"
+check "API rejects requests without a session" 401 "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$HTTP_PORT/api/v1/calls)"
 phone_up kitchen && ok "phone 10 registered"
 phone_up office && ok "phone 11 registered"
 

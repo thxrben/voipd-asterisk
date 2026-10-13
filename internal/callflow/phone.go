@@ -58,6 +58,7 @@ func (c *call) internal(from, to store.Extension) {
 		caller: engine.Party{Name: from.Name, Number: from.Number},
 	}}
 	c.publish(events.CallRinging, map[string]any{"extensions": []string{to.Number}})
+	c.snapshot([]string{to.Number})
 	out, winner, cause := c.dial(targets, internalRingTimeout, c.ringCaller)
 	c.afterPhoneDial(out, winner, cause, true)
 }

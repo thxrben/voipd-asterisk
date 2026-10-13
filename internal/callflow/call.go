@@ -154,7 +154,29 @@ func (c *call) begin(kind string) bool {
 	}
 	c.log = c.log.With("dir", c.rec.Direction, "caller", c.rec.Caller, "callee", c.rec.Callee)
 	c.log.Info("call started")
+	c.snapshot(nil)
 	return true
+}
+
+// snapshot publishes the call's current state to the manager's active
+// list. ringing, if non-nil, replaces the extensions being rung.
+func (c *call) snapshot(ringing []string) {
+	trunk := ""
+	c.m.mu.Lock()
+	trunk = c.m.trunkOf[c]
+	prev := c.m.active[c]
+	c.m.mu.Unlock()
+	if ringing == nil {
+		ringing = prev.Ringing
+	}
+	if c.rec.Status != store.CallRinging {
+		ringing = nil
+	}
+	c.m.setActive(c, ActiveCall{
+		ID: c.rec.ID, Direction: c.rec.Direction, Status: string(c.rec.Status), Caller: c.rec.Caller,
+		CallerName: c.rec.CallerName, Callee: c.rec.Callee, Trunk: trunk, Ringing: ringing,
+		AnsweredBy: c.rec.AnsweredBy, StartedAt: c.rec.StartedAt, AnsweredAt: c.rec.AnsweredAt,
+	})
 }
 
 // finish records the final status, publishes call.ended and waits briefly

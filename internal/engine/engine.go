@@ -40,6 +40,29 @@ type Engine interface {
 	// RestartWhenIdle restarts the engine as soon as no calls are active.
 	// Last resort of the trunk supervisor.
 	RestartWhenIdle(ctx context.Context) error
+
+	// Status information for the UI.
+	Connected() bool
+	Info(ctx context.Context) (Info, error)
+	// Contacts lists the registered contacts of phones (not trunks).
+	Contacts(ctx context.Context) ([]Contact, error)
+}
+
+type Info struct {
+	Version string        `json:"version"`
+	Uptime  time.Duration `json:"uptime"`
+	Calls   int           `json:"calls"` // channels' calls as Asterisk counts them
+}
+
+// Contact is one registered device of an endpoint.
+type Contact struct {
+	Endpoint  string        `json:"endpoint"` // SIP username of the extension
+	URI       string        `json:"uri"`
+	Addr      string        `json:"addr"` // source address, ip:port
+	UserAgent string        `json:"user_agent"`
+	Status    string        `json:"status"` // Reachable, Unreachable, Unknown, ...
+	RTT       time.Duration `json:"rtt"`
+	Expires   time.Time     `json:"expires"`
 }
 
 type HangupReason string

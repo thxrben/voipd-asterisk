@@ -12,6 +12,9 @@ VOIPD_PID=
 
 export VOIPD_ARI_PASSWORD=e2e-ari VOIPD_AMI_PASSWORD=e2e-ami
 export VOIPD_DB_PATH=$WORK/voipd.db VOIPD_GENERATED_DIR=$WORK/gen VOIPD_AREA_CODE=201
+# A port unlikely to be taken on a developer machine (8080 often is).
+HTTP_PORT=${HTTP_PORT:-18080}
+export VOIPD_HTTP_LISTEN=127.0.0.1:$HTTP_PORT
 
 PASS=0
 FAIL=0

@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"voipd/internal/admin"
+	"voipd/internal/callflow"
 	"voipd/internal/store"
 )
 
@@ -173,22 +174,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 // writeResult maps store/validation errors to HTTP responses, or applies
 // the configuration and returns body.
 func (s *Server) writeResult(w http.ResponseWriter, r *http.Request, err error, status int, body any) {
-	var verr admin.Errors
-	switch {
-	case errors.As(err, &verr):
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "please check the highlighted fields", "fields": verr})
-		return
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	case errors.Is(err, store.ErrConflict):
-		writeError(w, http.StatusConflict, "a name, number or username is already in use")
-		return
-	case errors.Is(err, store.ErrInUse):
-		writeError(w, http.StatusConflict, "still in use; remove the references first")
-		return
-	case err != nil:
-		s.internalError(w, r, err)
+	if s.writeErr(w, r, err) {
 		return
 	}
 	resp := map[string]any{"result": body}
@@ -200,6 +186,34 @@ func (s *Server) writeResult(w http.ResponseWriter, r *http.Request, err error, 
 		}
 	}
 	writeJSON(w, status, resp)
+}
+
+// writeOK is writeResult for changes that do not touch the SIP
+// configuration.
+func (s *Server) writeOK(w http.ResponseWriter, r *http.Request, err error, status int, body any) {
+	if !s.writeErr(w, r, err) {
+		writeJSON(w, status, map[string]any{"result": body})
+	}
+}
+
+// writeErr maps store/validation errors to HTTP responses; false if err is nil.
+func (s *Server) writeErr(w http.ResponseWriter, r *http.Request, err error) bool {
+	var verr admin.Errors
+	switch {
+	case err == nil:
+		return false
+	case errors.As(err, &verr):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "please check the highlighted fields", "fields": verr})
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, "a name, number or username is already in use")
+	case errors.Is(err, store.ErrInUse):
+		writeError(w, http.StatusConflict, "still in use; remove the references first")
+	default:
+		s.internalError(w, r, err)
+	}
+	return true
 }
 
 // --- trunks ---
@@ -454,7 +468,7 @@ func (s *Server) setDND(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "not your extension")
 		return
 	}
-	if err := s.d.Store.SetDND(r.Context(), id, body.DND); err != nil {
+	if err := callflow.SetDND(r.Context(), s.d.Store, s.d.Bus, e, body.DND); err != nil {
 		s.writeResult(w, r, err, 0, nil)
 		return
 	}

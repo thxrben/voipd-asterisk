@@ -6,6 +6,11 @@
   import { ago, bytes, dateTime, duration, num, phone, uptime } from '../lib/format'
   import type { Status } from '../lib/types'
   import ActiveCalls from '../components/ActiveCalls.svelte'
+  import ModuleState from '../components/integrations/ModuleState.svelte'
+  import { link } from '../lib/router.svelte'
+
+  const moduleLabel: Record<string, string> = { notify: 'E-mail', webhook: 'Webhooks', mqtt: 'MQTT' }
+  const moduleTab: Record<string, string> = { notify: 'email', webhook: 'webhooks', mqtt: 'mqtt' }
 
   let status = $state<Status | null>(null)
   let error = $state('')
@@ -150,6 +155,20 @@
         </table>
       </div>
     </section>
+
+    {#if Object.keys(status.modules ?? {}).length}
+      <section class="card">
+        <header><h2>Integrations</h2></header>
+        <ul class="lines">
+          {#each Object.entries(status.modules).sort() as [name, m] (name)}
+            <li>
+              <a href="/integrations?tab={moduleTab[name] ?? name}" onclick={link}>{moduleLabel[name] ?? name}</a>
+              <span class="right"><ModuleState status={m} /></span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
 
     <section class="card">
       <header><h2>Line and engine events</h2></header>

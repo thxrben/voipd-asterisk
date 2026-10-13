@@ -86,8 +86,9 @@ func (c *call) inbound() {
 		return
 	}
 
-	c.publish(events.CallRinging, map[string]any{"group": group.Name, "extensions": extNumbers(targets)})
-	c.snapshot(extNumbers(targets))
+	c.rung = extNumbers(targets)
+	c.publish(events.CallRinging, map[string]any{"group": group.Name, "extensions": c.rung})
+	c.snapshot(c.rung)
 	out, winner, _ := c.dial(targets, time.Duration(group.RingTimeout)*time.Second, nil)
 	switch out {
 	case outAnswered:
@@ -124,8 +125,14 @@ func (c *call) missed(status store.CallStatus, why string) {
 	c.finish(status)
 }
 
+// publishMissed includes the extensions that rang (if any), so
+// notifications know whom the call was for.
 func (c *call) publishMissed(status store.CallStatus, why string) {
-	c.publish(events.CallMissed, map[string]any{"status": string(status), "reason": why})
+	extra := map[string]any{"status": string(status), "reason": why}
+	if len(c.rung) > 0 {
+		extra["extensions"] = c.rung
+	}
+	c.publish(events.CallMissed, extra)
 }
 
 // stealthBlock leaves a blocked caller ringing: no answer, no rejection, no

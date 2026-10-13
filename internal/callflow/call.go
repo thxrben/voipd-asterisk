@@ -51,6 +51,7 @@ type call struct {
 	legs   map[string]*leg // dialed legs (B side), by channel id
 	order  []*leg          // dialed legs in dial order, for deterministic iteration
 	bridge string
+	rung   []string // extension numbers rung for an inbound call
 }
 
 func newCall(ctx context.Context, m *Manager, ch engine.Channel) *call {

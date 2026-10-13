@@ -24,7 +24,8 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | Web UI: Pi-hole-style dashboard, call log with details, status page (light/dark, mobile) | done |
 | Telephony configuration in the UI: lines (Telekom preset), numbers, extensions with phone credentials, ring groups, do not disturb | done |
 | Call blocking: block/allow lists, number ranges, PhoneBlock/CardDAV sync, bulk import, contacts, pause, anonymous blocking | done |
-| Modules (MQTT, webhooks, email), voicemail, directory, backups | in progress |
+| Integrations: MQTT with Home Assistant discovery, signed webhooks, e-mail notifications | done |
+| Voicemail, directory, backups | in progress |
 
 ## Run
 
@@ -103,6 +104,57 @@ a URL with a CSV/text/vCard list downloaded periodically, or a one-off
 import of a file (checked first, then imported as its own list so it can be
 removed again as a whole).
 
+## Integrations
+
+Configured under *Integrations* in the web UI; each one can be switched on
+and off separately and shows its connection state there and on the status
+page.
+
+**MQTT** (MQTT 5, e.g. the Mosquitto add-on of Home Assistant): broker URL
+`mqtt://host:1883`, `mqtts://host:8883` or `ws(s)://…`. With *Home Assistant
+discovery* on, voipd appears as a device with switches (block anonymous
+calls, pause blocking, do not disturb per phone) and sensors (lines, phones,
+calls/missed/blocked today, active calls, last caller). Topics, below the
+base topic `voipd`:
+
+| Topic | Payload |
+|---|---|
+| `status` | `online` / `offline` (last will) |
+| `line/<number>/state`, `…/attributes` | `up` / `down`, JSON details |
+| `extension/<ext>/dnd`, `extension/<ext>/registered` | `ON` / `OFF` |
+| `calls/active`, `calls/active/list`, `calls/last_caller` | count, JSON, name or number |
+| `stats/today` | JSON: `total`, `inbound`, `answered`, `missed`, `blocked`, … |
+| `blocking/anonymous`, `blocking/paused` | `ON` / `OFF` |
+| `event/<type>` | every event as JSON (`call.incoming`, `call.missed`, `trunk.down`, …), not retained |
+
+Commands (can be switched off): `blocking/anonymous/set` (`ON`/`OFF`),
+`blocking/pause/set` (minutes, `0` resumes), `blocklist/add` and
+`allowlist/add` (a number, or `{"number": …, "label": …}`),
+`extension/<ext>/dnd/set` (`ON`/`OFF`), `call/<id>/hangup`. Commands are
+recorded in the audit log as `mqtt`; a failed one is reported on `error`.
+
+**Webhooks**: every endpoint gets the events it subscribed to as a JSON POST
+(`{"type", "at", "call_id", "data"}`), in order, retried 4 times (1 s … 2 min).
+Each endpoint has its own secret (shown once when created):
+
+```
+X-Voipd-Event: call.missed
+X-Voipd-Delivery: <id, the same for every attempt>
+X-Voipd-Timestamp: <unix seconds>
+X-Voipd-Signature: sha256=<hex HMAC-SHA256(secret, timestamp + "." + body)>
+```
+
+```python
+expected = "sha256=" + hmac.new(secret, f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+ok = hmac.compare_digest(expected, request.headers["X-Voipd-Signature"]) and abs(time.time() - int(ts)) < 300
+```
+
+**E-mail** (SMTP with STARTTLS, TLS or plain on a trusted network): missed
+calls go to the owners of the phones that rang (their e-mail address comes
+from authentik) and to extra addresses; line outages/recovery and,
+optionally, blocked calls go to the admins. Mails are in German and link to
+the call in the web UI (`VOIPD_PUBLIC_URL`).
+
 ## Trunk reliability
 
 Asterisk's registration retries are configured never to give up (also after
@@ -137,6 +189,8 @@ test/e2e/dns.sh         # Telekom-like NAPTR/SRV with two servers and two number
 test/e2e/chaos.sh       # trunk outages, auth rejection, DNS failure, carrier IP move,
                         # engine restarts; asserts detection and bounded recovery (~12 min)
 test/e2e/ui.sh          # web UI in Chrome (Playwright) with demo data and a fake OIDC provider (~30 s)
+test/e2e/integrations.sh # Mosquitto, mailpit, webhook receiver: events, e-mail and MQTT commands
+                        # with real calls (~1.5 min)
 ```
 
 UI development: `go run ./test/devseed -db /tmp/demo.db` creates demo data;

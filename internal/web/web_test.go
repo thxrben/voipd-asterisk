@@ -21,6 +21,10 @@ import (
 	"voipd/internal/config"
 	"voipd/internal/engine"
 	"voipd/internal/events"
+	"voipd/internal/modules"
+	"voipd/internal/modules/mqtt"
+	"voipd/internal/modules/notify"
+	"voipd/internal/modules/webhook"
 	"voipd/internal/numbers"
 	"voipd/internal/screening"
 	"voipd/internal/stats"
@@ -133,10 +137,14 @@ func newEnv(t *testing.T, mutate func(*config.Auth)) *env {
 	syncer := screening.NewSyncer(st, screen, z, bus, log)
 	syncCtx, stopSync := context.WithCancel(context.Background())
 	syncDone := make(chan struct{})
+	modsDone := make(chan struct{})
 	go func() { defer close(syncDone); syncer.Run(syncCtx) }()
-	t.Cleanup(func() { stopSync(); <-syncDone })
+	t.Cleanup(func() { stopSync(); <-syncDone; <-modsDone })
+	mods := modules.NewManager(&modules.Host{Bus: bus, Store: st, Screening: screen, Numbers: z, Trunks: fakeTrunks{},
+		Stats: stats.New(st.DB), Log: log}, mqtt.New(), webhook.New(), notify.New())
+	go func() { defer close(modsDone); mods.Run(syncCtx) }()
 	h = New(Deps{Store: st, Numbers: z, Config: applied, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
-		Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Log: log, DataDir: t.TempDir(), StatusEvery: 50 * time.Millisecond,
+		Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Modules: mods, Log: log, DataDir: t.TempDir(), StatusEvery: 50 * time.Millisecond,
 		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
 	return &env{t: t, srv: srv, idp: idp, st: st, bus: bus, calls: calls, applied: applied, screen: screen}
 }

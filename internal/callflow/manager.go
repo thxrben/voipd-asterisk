@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"sort"
 	"sync"
@@ -182,6 +183,45 @@ func (m *Manager) ActiveList() []ActiveCall {
 	m.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.Before(out[j].StartedAt) })
 	return out
+}
+
+// ErrNoSuchCall: Hangup was given the ID of a call that is not in progress.
+var ErrNoSuchCall = errors.New("no such call in progress")
+
+// Hangup ends a call in progress by hanging up all its channels. The call
+// sees the hangups like any other and finishes normally.
+func (m *Manager) Hangup(ctx context.Context, callID string) error {
+	m.mu.Lock()
+	var chans []string
+	for id, c := range m.byChannel {
+		if c.rec.ID == callID {
+			chans = append(chans, id)
+		}
+	}
+	m.mu.Unlock()
+	if len(chans) == 0 {
+		return ErrNoSuchCall
+	}
+	var errs []error
+	for _, id := range chans {
+		if err := m.d.Engine.Hangup(ctx, id, engine.HangupNormal); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// SetDND switches Do Not Disturb of an extension and announces it. DND is
+// read per call, so nothing needs reloading.
+func SetDND(ctx context.Context, st *store.Store, bus *events.Bus, e store.Extension, on bool) error {
+	if err := st.SetDND(ctx, e.ID, on); err != nil {
+		return err
+	}
+	if bus != nil {
+		bus.Publish(events.Event{Type: events.ExtensionDND, At: time.Now(),
+			Data: map[string]any{"extension": e.Number, "dnd": on}})
+	}
+	return nil
 }
 
 func (m *Manager) untrackAll(c *call) {

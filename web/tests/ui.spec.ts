@@ -1,3 +1,6 @@
+import { createServer, type IncomingHttpHeaders } from 'node:http'
+import { createHmac } from 'node:crypto'
+import type { AddressInfo } from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
 
 const idp = process.env.IDP_URL ?? 'http://127.0.0.1:18090'
@@ -343,4 +346,135 @@ test('contacts: add, search, edit and delete', async ({ page }) => {
 
   await row.getByRole('button', { name: 'Delete Uncle Bob' }).click()
   await expect(row).toHaveCount(0)
+})
+
+test('integrations: e-mail settings with field errors and a kept password', async ({ page }) => {
+  await loginAs(page, admin)
+  await page.getByRole('link', { name: 'Integrations' }).click()
+  await page.getByRole('tab', { name: 'E-mail' }).click()
+  const form = page.getByRole('form', { name: 'E-mail settings' })
+  await form.getByLabel('Send e-mail notifications').check()
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(form.getByText("enter the mail server's host name")).toBeVisible()
+  await expect(form.getByText('enter a sender address')).toBeVisible()
+
+  await form.getByLabel('SMTP server').fill('smtp.example.org')
+  await form.getByLabel('Encryption').selectOption('tls')
+  await expect(form.getByLabel('Port')).toHaveValue('465')
+  await form.getByLabel('Username').fill('pbx')
+  await form.getByLabel('Password').fill('mail-secret')
+  await form.getByLabel('Sender').fill('Telefon <pbx@example.org>')
+  await form.getByLabel('Missed calls also to').fill('family@example.org')
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('E-mail notifications saved')).toBeVisible()
+  await expect(page.locator('section.card .badge', { hasText: 'running' })).toBeVisible()
+
+  await page.reload()
+  await expect(form.getByLabel('Password')).toHaveAttribute('placeholder', /unchanged/)
+  await expect(form.getByLabel('Missed calls also to')).toHaveValue('family@example.org')
+  const mods = await (await page.request.get('/api/v1/modules')).json()
+  const notify = mods.modules.find((m: { name: string }) => m.name === 'notify')
+  expect(notify.config.password).toBeUndefined()
+  expect(notify.config.password_set).toBe(true)
+
+  // Status page lists the module; switch it off again.
+  await page.getByRole('link', { name: 'Status' }).click()
+  await expect(page.locator('section.card', { has: page.getByRole('heading', { name: 'Integrations' }) })).toContainText('E-mail')
+  await page.getByRole('link', { name: 'Integrations' }).click()
+  await page.getByRole('tab', { name: 'E-mail' }).click()
+  await form.getByLabel('Send e-mail notifications').uncheck()
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('E-mail notifications are off')).toBeVisible()
+})
+
+test('integrations: webhook with secret, test delivery and history', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept())
+  const got: { headers: IncomingHttpHeaders; body: string }[] = []
+  const rcv = createServer((req, res) => {
+    let body = ''
+    req.on('data', (c: Buffer) => (body += c.toString()))
+    req.on('end', () => {
+      got.push({ headers: req.headers, body })
+      res.end('ok')
+    })
+  })
+  await new Promise<void>((r) => rcv.listen(0, '127.0.0.1', r))
+  const url = `http://127.0.0.1:${(rcv.address() as AddressInfo).port}/hook`
+  try {
+    await loginAs(page, admin)
+    await page.goto('/integrations?tab=webhooks')
+    await page.getByLabel('Send events to webhooks').check()
+    await expect(page.locator('section.card .badge', { hasText: 'running' })).toBeVisible()
+
+    await page.getByRole('button', { name: 'Add webhook' }).click()
+    const dlg = page.getByRole('dialog')
+    await dlg.getByLabel('Name').fill('Home Assistant')
+    await dlg.getByLabel('URL').fill('not a url')
+    await dlg.getByRole('button', { name: 'Add' }).click()
+    await expect(dlg.getByLabel('URL')).toHaveJSProperty('validity.valid', false)
+    await dlg.getByLabel('URL').fill(url)
+    await dlg.getByLabel('All events').uncheck()
+    await dlg.getByLabel('Missed call').check()
+    await dlg.getByRole('button', { name: 'Add' }).click()
+
+    await expect(page.getByTestId('webhook-secret')).toHaveText(/^whsec_/)
+    const secret = (await page.getByTestId('webhook-secret').textContent()) ?? ''
+    await page.getByRole('button', { name: 'Done' }).click()
+    const row = page.locator('tr', { hasText: 'Home Assistant' })
+    await expect(row).toContainText('Missed call')
+
+    await row.getByRole('button', { name: 'Send test to Home Assistant' }).click()
+    await expect(page.getByText(/test delivered \(HTTP 200/)).toBeVisible()
+    expect(got).toHaveLength(1)
+    const h = got[0]!.headers
+    const sig = createHmac('sha256', secret).update(`${h['x-voipd-timestamp'] as string}.${got[0]!.body}`).digest('hex')
+    expect(h['x-voipd-signature']).toBe(`sha256=${sig}`)
+    expect(JSON.parse(got[0]!.body).type).toBe('test.ping')
+
+    await row.getByRole('button', { name: 'Deliveries of Home Assistant' }).click()
+    await expect(page.getByRole('dialog').locator('td', { hasText: 'test.ping' })).toBeVisible()
+    await page.getByRole('dialog').getByRole('button', { name: 'Close' }).last().click()
+
+    await row.getByRole('button', { name: 'Delete Home Assistant' }).click()
+    await expect(page.getByText('No webhooks yet.')).toBeVisible()
+    await page.getByLabel('Send events to webhooks').uncheck()
+  } finally {
+    rcv.close()
+  }
+})
+
+test('integrations: MQTT settings', async ({ page }) => {
+  await loginAs(page, admin)
+  await page.goto('/integrations')
+  const form = page.getByRole('form', { name: 'MQTT settings' })
+  await form.getByLabel('Connect to an MQTT broker').check()
+  await form.getByPlaceholder('mqtt://homeassistant.local:1883').fill('http://nope')
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(form.getByText('use mqtt://, mqtts://, ws:// or wss://')).toBeVisible()
+
+  // No broker listens there: saved, the module keeps trying and says why.
+  await form.getByPlaceholder('mqtt://homeassistant.local:1883').fill('mqtt://127.0.0.1:1')
+  await form.getByLabel('Username').fill('voipd')
+  await form.getByLabel('Password').fill('mqtt-secret')
+  await form.getByRole('button', { name: 'Show advanced settings' }).click()
+  await form.getByLabel('Base topic').fill('pbx')
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('MQTT saved – connecting')).toBeVisible()
+  await expect(page.getByText('pbx/blocking/anonymous/set')).toBeVisible()
+  await expect
+    .poll(async () => (await (await page.request.get('/api/v1/modules')).json()).modules[0].status.state, { timeout: 15_000 })
+    .toBe('error')
+  await page.reload()
+  await expect(form.getByLabel('Password')).toHaveAttribute('placeholder', /unchanged/)
+
+  await form.getByLabel('Connect to an MQTT broker').uncheck()
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('MQTT is off')).toBeVisible()
+})
+
+test('users cannot open integrations', async ({ page }) => {
+  await loginAs(page, alice)
+  await expect(page.getByRole('link', { name: 'Integrations' })).toHaveCount(0)
+  await page.goto('/integrations')
+  await expect(page).toHaveURL(/\/calls$/)
 })

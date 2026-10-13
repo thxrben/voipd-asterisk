@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"voipd/internal/modules"
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/sysinfo"
@@ -49,12 +50,13 @@ type statusResponse struct {
 		Version       string `json:"version"`
 		UptimeSeconds int64  `json:"uptime_seconds"`
 	} `json:"engine"`
-	Trunks     []trunks.Status  `json:"trunks"`
-	TrunksUp   int              `json:"trunks_up"`
-	Phones     []phoneStatus    `json:"phones"`
-	ActiveCall int              `json:"active_calls"`
-	System     sysinfo.Info     `json:"system"`
-	Events     []store.SIPEvent `json:"events"` // recent trunk/engine events
+	Trunks     []trunks.Status           `json:"trunks"`
+	TrunksUp   int                       `json:"trunks_up"`
+	Phones     []phoneStatus             `json:"phones"`
+	ActiveCall int                       `json:"active_calls"`
+	System     sysinfo.Info              `json:"system"`
+	Events     []store.SIPEvent          `json:"events"` // recent trunk/engine events
+	Modules    map[string]modules.Status `json:"modules"`
 }
 
 type phoneStatus struct {
@@ -113,6 +115,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp.ActiveCall = len(s.d.Calls.ActiveList())
+	resp.Modules = map[string]modules.Status{}
+	if s.d.Modules != nil {
+		resp.Modules = s.d.Modules.Statuses()
+	}
 	resp.System = sysinfo.Read(s.d.DataDir)
 	if resp.Events, err = s.d.Store.SIPEvents(r.Context(), "", 50); err != nil {
 		s.internalError(w, r, err)
@@ -243,8 +249,7 @@ func rangeFor(name string, now time.Time) (stats.Range, bool) {
 	case "", "24h":
 		return stats.Range{From: now.Add(-24 * time.Hour), To: now}, true
 	case "today":
-		y, m, d := now.Date()
-		return stats.Range{From: time.Date(y, m, d, 0, 0, 0, 0, now.Location()), To: now}, true
+		return stats.Today(now), true
 	case "7d":
 		return stats.Range{From: now.Add(-7 * 24 * time.Hour), To: now}, true
 	case "30d":

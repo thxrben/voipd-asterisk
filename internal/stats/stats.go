@@ -16,6 +16,12 @@ func New(db *sql.DB) *Stats { return &Stats{db: db} }
 // Range is a time window [From, To).
 type Range struct{ From, To time.Time }
 
+// Today is the window from local midnight until now.
+func Today(now time.Time) Range {
+	y, m, d := now.Date()
+	return Range{From: time.Date(y, m, d, 0, 0, 0, 0, now.Location()), To: now}
+}
+
 // Summary are the dashboard tiles.
 type Summary struct {
 	Total         int      `json:"total"`

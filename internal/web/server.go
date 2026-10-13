@@ -20,6 +20,7 @@ import (
 	"voipd/internal/callflow"
 	"voipd/internal/engine"
 	"voipd/internal/events"
+	"voipd/internal/modules"
 	"voipd/internal/numbers"
 	"voipd/internal/screening"
 	"voipd/internal/stats"
@@ -61,6 +62,7 @@ type Deps struct {
 	Stats          *stats.Stats
 	Screening      *screening.Engine
 	Syncer         *screening.Syncer
+	Modules        *modules.Manager
 	Log            *slog.Logger
 	UI             fs.FS // built web UI (index.html + assets); nil = none
 	DataDir        string
@@ -142,6 +144,17 @@ func New(d Deps) http.Handler {
 			r.Post("/contacts", s.createContact)
 			r.Put("/contacts/{id}", s.updateContact)
 			r.Delete("/contacts/{id}", s.deleteContact)
+
+			r.Get("/modules", s.listModules)
+			r.Put("/modules/{name}", s.saveModule)
+			r.Post("/modules/notify/test", s.testMail)
+			r.Get("/webhooks", s.listWebhooks)
+			r.Post("/webhooks", s.createWebhook)
+			r.Put("/webhooks/{id}", s.updateWebhook)
+			r.Delete("/webhooks/{id}", s.deleteWebhook)
+			r.Post("/webhooks/{id}/secret", s.regenerateWebhookSecret)
+			r.Post("/webhooks/{id}/test", s.testWebhook)
+			r.Get("/webhooks/{id}/deliveries", s.webhookDeliveries)
 		})
 	})
 

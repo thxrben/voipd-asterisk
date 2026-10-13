@@ -2,6 +2,7 @@ package callflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -347,8 +348,18 @@ func TestInboundTimeoutIsMissed(t *testing.T) {
 	e.eng.hangup("A", 19)
 
 	evs := e.events(t)
-	if !strings.Contains(strings.Join(types(evs), ","), "call.missed") {
-		t.Errorf("no call.missed: %v", types(evs))
+	var missed *events.Event
+	for i := range evs {
+		if evs[i].Type == events.CallMissed {
+			missed = &evs[i]
+		}
+	}
+	if missed == nil {
+		t.Fatalf("no call.missed: %v", types(evs))
+	}
+	// Notifications need to know whom the call was for.
+	if got := fmt.Sprint(missed.Data["extensions"]); got != "[10 11]" {
+		t.Errorf("missed extensions = %s", got)
 	}
 	if c := e.onlyCall(t); c.Status != store.CallMissed {
 		t.Errorf("status = %s", c.Status)
@@ -632,4 +643,84 @@ func TestActiveListSnapshots(t *testing.T) {
 	e.eng.hangup(e.eng.originated(t, "kitchen").ID, 26)
 	e.events(t)
 	waitActive(func(l []ActiveCall) bool { return len(l) == 0 })
+}
+
+func TestHangupFromOutside(t *testing.T) {
+	e := newEnv(t, 30, "hangup")
+	if err := e.m.Hangup(context.Background(), "nope"); !errors.Is(err, ErrNoSuchCall) {
+		t.Errorf("unknown call: %v", err)
+	}
+	e.inbound("A", "+491701234567")
+	e.eng.expect(t, "ring A")
+	e.eng.expect(t, "originate kitchen")
+	e.eng.expect(t, "originate office")
+	office := e.eng.originated(t, "office").ID
+	kitchen := e.eng.originated(t, "kitchen").ID
+	e.eng.state(office, "Up")
+	e.eng.expect(t, "hangup <leg:kitchen> answered_elsewhere")
+	e.eng.expect(t, "answer A")
+	e.eng.expect(t, "bridge create")
+	e.eng.expect(t, "bridge add br1 A,<leg:office>")
+	e.eng.hangup(kitchen, 26)
+
+	var id string
+	deadline := time.Now().Add(3 * time.Second)
+	for id == "" {
+		if l := e.m.ActiveList(); len(l) == 1 && l[0].Status == "answered" {
+			id = l[0].ID
+		} else if time.Now().After(deadline) {
+			t.Fatal("call never answered")
+		} else {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if err := e.m.Hangup(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	// Every channel the call ever had is hung up (gone ones are a no-op).
+	got := map[string]bool{}
+	for !got["hangup A normal"] || !got["hangup "+office+" normal"] {
+		select {
+		case a := <-e.eng.actions:
+			got[a] = true
+		case <-time.After(3 * time.Second):
+			t.Fatalf("hangups: %v", got)
+		}
+	}
+	e.eng.hangup("A", engine.CauseNormal)
+	e.eng.hangup(office, engine.CauseNormal)
+	e.events(t)
+	if c := e.onlyCall(t); c.Status != store.CallAnswered {
+		t.Errorf("status = %s", c.Status)
+	}
+}
+
+func TestSetDNDAnnounces(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.DB.Exec(`INSERT INTO extensions(id, number, name, sip_username, sip_password) VALUES (1, '10', 'Kitchen', 'kitchen', 'x')`); err != nil {
+		t.Fatal(err)
+	}
+	bus := events.NewBus(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	sub, unsub := bus.Subscribe("extension.", 4)
+	defer unsub()
+	e, _ := st.ExtensionByID(ctx, 1)
+	if err := SetDND(ctx, st, bus, e, true); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ = st.ExtensionByID(ctx, 1); !e.DND {
+		t.Error("dnd not stored")
+	}
+	select {
+	case ev := <-sub:
+		if ev.Type != events.ExtensionDND || ev.Data["extension"] != "10" || ev.Data["dnd"] != true {
+			t.Errorf("event = %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no extension.dnd event")
+	}
 }

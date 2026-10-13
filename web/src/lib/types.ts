@@ -183,6 +183,7 @@ export interface Status {
     uptime_seconds: number | null
   }
   events: { at: string; type: string; subject: string; detail: Record<string, unknown> }[]
+  modules: Record<string, ModuleStatus>
 }
 
 // --- telephony configuration ---
@@ -356,4 +357,69 @@ export interface Contact {
   name: string
   org: string
   numbers: ContactNumber[]
+}
+
+// --- integrations ---
+
+export type ModuleState = 'disabled' | 'starting' | 'ok' | 'error'
+
+export interface ModuleStatus {
+  state: ModuleState
+  detail: string
+  since: string
+}
+
+export interface ModuleView<C = Record<string, unknown>> {
+  name: string
+  enabled: boolean
+  config: C
+  status: ModuleStatus
+}
+
+export interface NotifyConfig {
+  host: string
+  port: number
+  security: 'none' | 'starttls' | 'tls'
+  username: string
+  password?: string
+  password_set?: boolean
+  from: string
+  missed_calls: boolean
+  missed_to: string[]
+  blocked_calls: boolean
+  trunk_alerts: boolean
+  admin_to: string[]
+}
+
+export interface WebhookEndpoint {
+  id: number
+  name: string
+  url: string
+  events: string[]
+  enabled: boolean
+}
+
+export interface WebhookDelivery {
+  id: number
+  delivery: string
+  event_type: string
+  at: string
+  attempt: number
+  status_code: number
+  latency_ms: number
+  error: string
+  response: string
+}
+
+export interface MqttConfig {
+  url: string
+  username: string
+  password?: string
+  password_set?: boolean
+  client_id: string
+  base_topic: string
+  insecure: boolean
+  commands: boolean
+  discovery: boolean
+  discovery_prefix: string
 }

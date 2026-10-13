@@ -25,6 +25,10 @@ import (
 	"voipd/internal/engine"
 	"voipd/internal/engine/asterisk"
 	"voipd/internal/events"
+	"voipd/internal/modules"
+	"voipd/internal/modules/mqtt"
+	"voipd/internal/modules/notify"
+	"voipd/internal/modules/webhook"
 	"voipd/internal/numbers"
 	"voipd/internal/pbx"
 	"voipd/internal/screening"
@@ -127,6 +131,12 @@ func run() error {
 	if !authSvc.OIDCEnabled() && !authSvc.LocalEnabled() {
 		log.Warn("no web login configured: set VOIPD_OIDC_* (authentik) or VOIPD_ADMIN_PASSWORD_HASH")
 	}
+	statistics := stats.New(st.DB)
+	mods := modules.NewManager(&modules.Host{
+		Bus: bus, Store: st, Screening: screen, Numbers: nums, Calls: calls, Phones: eng, Trunks: sup,
+		Stats: statistics, PublicURL: cfg.HTTP.PublicURL, Log: log.With("component", "modules"),
+	}, mqtt.New(), webhook.New(), notify.New())
+
 	var proxies []netip.Prefix
 	for _, p := range cfg.HTTP.TrustedProxies {
 		proxies = append(proxies, netip.MustParsePrefix(p)) // validated by config.Load
@@ -135,7 +145,7 @@ func run() error {
 		Addr: cfg.HTTP.Listen,
 		Handler: web.New(web.Deps{
 			Store: st, Numbers: nums, Config: conf, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
-			Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Log: log.With("component", "web"), UI: webui.FS(),
+			Stats: statistics, Screening: screen, Syncer: syncer, Modules: mods, Log: log.With("component", "web"), UI: webui.FS(),
 			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -155,7 +165,8 @@ func run() error {
 		}
 		httpDone <- nil
 	}()
-	wg.Add(6)
+	wg.Add(7)
+	go func() { defer wg.Done(); mods.Run(ctx) }()
 	go func() { defer wg.Done(); screen.Run(ctx) }()
 	go func() { defer wg.Done(); syncer.Run(ctx) }()
 	go func() { defer wg.Done(); cleanupLoop(ctx, authSvc) }()

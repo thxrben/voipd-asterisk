@@ -19,6 +19,8 @@ const (
 	CallAnswered = "call.answered"
 	CallMissed   = "call.missed" // nobody answered (timeout or caller gave up)
 	CallEnded    = "call.ended"  // final event of every call, with status and durations
+
+	ExtensionDND = "extension.dnd" // do not disturb switched: extension, dnd
 )
 
 // Event is JSON-friendly so it can be forwarded unchanged.

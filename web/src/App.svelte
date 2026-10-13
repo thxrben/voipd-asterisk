@@ -5,6 +5,7 @@
   import Settings from '@lucide/svelte/icons/settings'
   import ShieldBan from '@lucide/svelte/icons/shield-ban'
   import BookUser from '@lucide/svelte/icons/book-user'
+  import Plug from '@lucide/svelte/icons/plug'
   import LogOut from '@lucide/svelte/icons/log-out'
   import Sun from '@lucide/svelte/icons/sun'
   import Moon from '@lucide/svelte/icons/moon'
@@ -22,6 +23,7 @@
   import Telephony from './routes/Telephony.svelte'
   import Blocking from './routes/Blocking.svelte'
   import Contacts from './routes/Contacts.svelte'
+  import Integrations from './routes/Integrations.svelte'
   import Toasts from './components/Toasts.svelte'
 
   let loadError = $state('')
@@ -44,6 +46,7 @@
     { href: '/blocking', label: 'Blocking', icon: ShieldBan, admin: true },
     { href: '/contacts', label: 'Contacts', icon: BookUser, admin: true },
     { href: '/telephony', label: 'Telephony', icon: Settings, admin: true },
+    { href: '/integrations', label: 'Integrations', icon: Plug, admin: true },
     { href: '/status', label: 'Status', icon: Server, admin: true },
   ]
   const items = $derived(nav.filter((n) => !n.admin || session.isAdmin))
@@ -54,7 +57,7 @@
 
   // Users without admin rights start on their own call list.
   $effect(() => {
-    const adminPaths = ['/', '/status', '/telephony', '/blocking', '/contacts']
+    const adminPaths = ['/', '/status', '/telephony', '/blocking', '/contacts', '/integrations']
     if (session.state === 'ready' && !session.isAdmin && adminPaths.includes(router.path)) {
       router.go('/calls', true)
     }
@@ -135,6 +138,8 @@
           <Contacts />
         {:else if router.path === '/telephony' && session.isAdmin}
           <Telephony />
+        {:else if router.path === '/integrations' && session.isAdmin}
+          <Integrations />
         {:else if router.path === '/' && session.isAdmin}
           <Dashboard />
         {:else}

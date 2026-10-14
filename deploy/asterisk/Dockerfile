@@ -31,6 +31,11 @@ RUN ./configure --with-pjproject-bundled --with-jansson --with-srtp --with-unbou
     && make -j"$(nproc)" \
     && make install DESTDIR=/out \
     && rm -rf /out/usr/include
+# /var/run is a symlink to /run in the final image; BuildKit refuses to copy
+# a directory over it. (Separate step so the compile above stays cached.)
+RUN if [ -d /out/var/run ]; then \
+        mkdir -p /out/run && cp -a /out/var/run/. /out/run/ && rm -rf /out/var/run; \
+    fi
 
 # German voice prompts, rendered once at build time with Piper TTS (offline,
 # "Thorsten" voice); nothing TTS-related ends up in the final image.

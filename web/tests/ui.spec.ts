@@ -715,6 +715,16 @@ test('system: SIP access control and bans', async ({ page }) => {
   await page.getByRole('button', { name: 'Unban 203.0.113.9/32' }).click()
   await expect(page.getByText('Nobody is banned.')).toBeVisible()
 
+  // Own certificate authority: download and extra names.
+  await expect(page.getByRole('heading', { name: 'TLS certificate' })).toBeVisible()
+  const ca = await page.request.get((await page.getByRole('link', { name: 'voipd-ca.pem' }).getAttribute('href')) ?? '')
+  expect(await ca.text()).toContain('BEGIN CERTIFICATE')
+  const names = page.getByRole('form', { name: 'Certificate names' })
+  await names.getByRole('textbox').fill('pbx.home.arpa')
+  await names.getByRole('button', { name: 'Save names' }).click()
+  await expect(page.getByText('Certificate issued for the new names')).toBeVisible()
+  await expect(page.getByText(/pbx\.home\.arpa ·/)).toBeVisible()
+
   // Back to automatic for the other tests.
   await form.getByRole('radio', { name: /Automatic/ }).check()
   await form.getByRole('button', { name: 'Save' }).click()

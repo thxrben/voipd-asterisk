@@ -192,6 +192,10 @@ func Extension(x *store.Extension, z *numbers.Normalizer, passwordSet bool) erro
 	if !slices.Contains([]string{"udp", "tcp", "tls"}, x.Transport) {
 		e["transport"] = "must be udp, tcp or tls"
 	}
+	if x.SRTP && x.Transport != "tls" {
+		// SDES sends the media keys in the SIP messages.
+		e["srtp"] = "encrypted media (SRTP) needs the TLS transport, otherwise its keys travel in clear text"
+	}
 	if len(x.Codecs) == 0 {
 		x.Codecs = slices.Clone(Codecs)
 	}

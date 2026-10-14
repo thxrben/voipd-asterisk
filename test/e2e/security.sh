@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end SIP access control: phones only from allowed networks (the
-# carrier line is not affected), and a sender with a wrong password is
+# End-to-end SIP security: a phone registers over TLS, verifying voipd's
+# own certificate, and calls with SRTP; phones only from allowed networks
+# (the carrier line is not affected); a sender with a wrong password is
 # banned after repeated failures until unbanned.
 #
 #   test/e2e/security.sh        (~2 min)
@@ -35,6 +36,76 @@ peer_reg() { peer "pjsip show registrations" | grep -E "^ *$1/" | grep -oE "Regi
 reregister() { peer "pjsip send unregister $1" >/dev/null; sleep 1; peer "pjsip send register $1" >/dev/null; }
 phone_registered() { [ "$(peer_reg "$1")" = Registered ]; }
 phone_refused() { [ "$(peer_reg "$1")" = Rejected ]; }
+
+log "TLS with voipd's own certificate, SRTP"
+check "TLS transport has voipd's certificate" 1 \
+	"$(pbx "pjsip show transport transport-tls" | grep -c 'cert_file.*/etc/asterisk/voipd/tls/server-')"
+curl -s "$API/ca.pem" -o "$WORK/ca.pem"
+docker cp "$WORK/ca.pem" "$PEER:/etc/asterisk/voipd-ca.pem"
+EXT11='{"id":2,"number":"11","name":"Office","enabled":true,"sip_username":"office","password":"","codecs":["alaw"],"max_contacts":3,"outbound_number_id":0,"clir":false,"dnd":false,"owner_subject":""'
+check "SRTP over UDP refused" 1 "$(api PUT /extensions/2 "$EXT11,\"transport\":\"udp\",\"srtp\":true}" | grep -c 'needs the TLS transport')"
+api PUT /extensions/2 "$EXT11,\"transport\":\"tls\",\"srtp\":true}" >/dev/null
+check "office requires SRTP" 1 "$(pbx "pjsip show endpoint office" | grep -cE 'media_encryption +: sdes')"
+GW=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
+# The phone: a TLS transport that verifies the PBX against voipd's CA, a
+# registration and an endpoint with SRTP. "core restart" because PJSIP
+# sets up transports only at startup.
+docker exec -i "$PEER" sh -c 'cat > /etc/asterisk/intruder.conf' <<CONF
+[tls]
+type = transport
+protocol = tls
+bind = 0.0.0.0:5071
+method = tlsv1_2
+ca_list_file = /etc/asterisk/voipd-ca.pem
+verify_server = yes
+
+[phone11tls]
+type = registration
+transport = tls
+server_uri = sip:$GW:5061\;transport=tls
+client_uri = sip:office@$GW
+contact_user = phone11
+outbound_auth = phone11-auth
+retry_interval = 3
+expiration = 120
+
+[phone11tls]
+type = aor
+contact = sip:$GW:5061\;transport=tls
+
+[phone11tls]
+type = endpoint
+transport = tls
+context = from-pbx
+disallow = all
+allow = alaw
+outbound_auth = phone11-auth
+aors = phone11tls
+from_user = office
+direct_media = no
+media_encryption = sdes
+CONF
+peer_restart() {
+	peer "core restart now" >/dev/null 2>&1 || true
+	sleep 3
+	peer_up() { peer "pjsip show endpoint pbx" | grep -q "Endpoint:  pbx"; }
+	wait_for "peer back after restart" 60 peer_up
+}
+peer_restart
+tls_registered() { peer "pjsip show registrations" | grep -E "^ *phone11tls/" | grep -q Registered; }
+wait_for "phone registers over TLS, server certificate verified" 30 tls_registered
+# (The CLI cuts the URI after "transport=".)
+check "contact over TLS at the PBX" 1 "$(pbx "pjsip show contacts" | grep -c 'office/sip:phone11@.*;transport=')"
+peer "database put test phone10 answer:1" >/dev/null
+peer "database put test talk 3" >/dev/null
+before=$(sql "SELECT count(*) FROM calls WHERE ended_at IS NOT NULL")
+peer "channel originate PJSIP/10@phone11tls application Wait 6" >/dev/null
+wait_for "SRTP call over TLS finished" 30 calls_done $((before + 1))
+check "call answered" "11|10|answered" "$(last_call "caller || '|' || callee || '|' || status")"
+check "caller leg: TLS and SRTP" "tls|1" \
+	"$(sql "SELECT transport || '|' || srtp FROM call_legs WHERE endpoint = 'office' ORDER BY created_at DESC LIMIT 1")"
+docker exec "$PEER" rm /etc/asterisk/intruder.conf
+peer_restart
 
 log "automatic networks include the docker bridge: phones register"
 check "phone ACL on the endpoint" "acl : deny/permit" "$(pbx "pjsip show endpoint kitchen" | grep -oE "^ *acl +: deny/permit" | tr -s ' ' | sed 's/^ //')"

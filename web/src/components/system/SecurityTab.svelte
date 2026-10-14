@@ -82,6 +82,34 @@
     }
   }
 
+  let tlsNames = $state('')
+  let tlsSave = $state(emptySave())
+  $effect(() => {
+    if (info?.tls && tlsNames === '' && info.tls.extra_names.length) tlsNames = info.tls.extra_names.join('\n')
+  })
+
+  async function saveNames(e: SubmitEvent) {
+    e.preventDefault()
+    const names = tlsNames.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean)
+    const ok = await runSave(tlsSave, async () => {
+      const res = await api<{ result: SecurityInfo; warning?: string }>('/security/tls', { method: 'PUT', json: { names } })
+      info = res.result
+      return res
+    })
+    if (ok) toast.show('Certificate issued for the new names')
+  }
+
+  async function renew() {
+    const ok = await runSave(tlsSave, async () => {
+      const res = await api<{ result: SecurityInfo; warning?: string }>('/security/tls/renew', { method: 'POST' })
+      info = res.result
+      return res
+    })
+    if (ok) toast.show('New certificate issued')
+  }
+
+  const short = (fp: string) => fp.slice(0, 32).replace(/(..)(?=.)/g, '$1:').toUpperCase() + '…'
+
   const kinds = { password: 'wrong password', unknown_account: 'unknown account', acl: 'outside allowed networks' }
 </script>
 
@@ -129,6 +157,43 @@
       <div class="actions"><button class="primary" type="submit" disabled={save.busy}>Save</button></div>
     </form>
   </section>
+
+  {#if info.tls}
+    {@const t = info.tls}
+    <section class="card">
+      <header><h2>TLS certificate</h2></header>
+      <div class="body form">
+        <p class="muted">
+          voipd runs its own certificate authority. Phones that connect with TLS (port 5061, needed for SRTP) and LDAPS
+          clients trust voipd once its CA is imported, or when they skip certificate checks. The server certificate is
+          renewed automatically.
+        </p>
+        {#if !t.own}
+          <p class="warn-box">SIP-TLS uses the certificate files from VOIPD_TLS_CERT_FILE; this certificate serves LDAPS only.</p>
+        {/if}
+        <div class="kv">
+          <span>Certificate authority</span>
+          <span><span class="mono small">{short(t.ca_fingerprint)}</span> · valid until {dateTime(t.ca_expires)}
+            · <a href="/ca.pem" download>voipd-ca.pem</a> · <a href="/ca.crt" download>.crt</a></span>
+          <span>Server certificate</span>
+          <span><span class="mono small">{short(t.server_fingerprint)}</span> · valid until {dateTime(t.server_expires)}</span>
+          <span>Covers</span>
+          <span class="mono small names">{[...t.dns_names, ...t.ips].join(' · ')}</span>
+        </div>
+        <form class="form" onsubmit={saveNames} aria-label="Certificate names">
+          <Field label="Additional names and addresses" error={tlsSave.fields['names']}
+            help="One per line, e.g. pbx.home.arpa or the WireGuard address; this host's name and IPv4 addresses are included">
+            <textarea rows="2" bind:value={tlsNames} class="mono"></textarea>
+          </Field>
+          {#if tlsSave.error && Object.keys(tlsSave.fields).length === 0}<p class="error-box">{tlsSave.error}</p>{/if}
+          <div class="actions">
+            <button type="button" onclick={renew} disabled={tlsSave.busy}>Renew now</button>
+            <button class="primary" type="submit" disabled={tlsSave.busy}>Save names</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  {/if}
 
   <div class="row">
     <section class="card">
@@ -235,6 +300,21 @@
   .actions {
     display: flex;
     justify-content: flex-end;
+    gap: 0.5rem;
+  }
+  .kv {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem 1rem;
+    align-items: baseline;
+  }
+  @media (max-width: 600px) {
+    .kv {
+      grid-template-columns: 1fr;
+    }
+  }
+  .names {
+    overflow-wrap: anywhere;
   }
   .warn-box {
     padding: 0.6rem 0.8rem;

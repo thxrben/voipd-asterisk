@@ -19,6 +19,7 @@ import (
 	"voipd/internal/auth/oidctest"
 	"voipd/internal/backup"
 	"voipd/internal/callflow"
+	"voipd/internal/certs"
 	"voipd/internal/config"
 	"voipd/internal/directory"
 	"voipd/internal/engine"
@@ -165,7 +166,11 @@ func newEnv(t *testing.T, mutate func(*config.Auth)) *env {
 	if err := guard.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	h = New(Deps{Backup: backups, Security: guard, AfterImport: func(context.Context) error { ev.imports++; return nil },
+	certMgr := certs.New(st, t.TempDir(), "/etc/asterisk/voipd", log)
+	if _, err := certMgr.Ensure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h = New(Deps{Backup: backups, Security: guard, Certs: certMgr, OwnCert: true, SetTLS: func(string, string) {}, AfterImport: func(context.Context) error { ev.imports++; return nil },
 		Restart: func() { ev.restarts <- struct{}{} }, Store: st, Numbers: z, Config: applied, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
 		Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
 		Directory: phonebook, DirectoryAccounts: dirAcc, CardDAV: directory.NewCardDAV(phonebook, dirAcc, log),

@@ -267,6 +267,8 @@ export interface Credentials {
   auth_username: string
   transport: string
   port: number
+  srtp: boolean
+  ca_url: string
 }
 
 // --- screening ---
@@ -475,6 +477,7 @@ export interface DirectoryAccount {
 
 export interface DirectoryInfo {
   ldap: { listening: boolean; port: number; error: string }
+  ldaps: { listening: boolean; port: number; error: string }
   base_dn: string
   carddav_path: string
   accounts: DirectoryAccount[]
@@ -559,4 +562,15 @@ export interface SecurityInfo {
   recent: { at: string; ip: string; account: string; kind: 'password' | 'unknown_account' | 'acl' }[]
   client_ip: string
   client_allowed: boolean
+  tls?: {
+    own: boolean
+    ca_fingerprint: string
+    ca_expires: string
+    server_fingerprint: string
+    server_expires: string
+    server_issued: string
+    dns_names: string[]
+    ips: string[]
+    extra_names: string[]
+  }
 }

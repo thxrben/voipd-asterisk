@@ -40,8 +40,9 @@ docker compose up -d --build
 
 Both containers use host networking (SIP/RTP need real addresses; ARI/AMI
 stay on 127.0.0.1). Ports: SIP 5060/udp+tcp, 5061/tcp (TLS), RTP
-10000–10999/udp, web UI and CardDAV 8080/tcp, LDAP 389/tcp. voipd starts as
-root with only the capabilities to open port 389 and to switch users, then
+10000–10999/udp, web UI and CardDAV 8080/tcp, LDAP 389/tcp, LDAPS 636/tcp.
+voipd starts as root with only the capabilities to open ports 389 and 636
+and to switch users, then
 runs as an unprivileged user without any capabilities.
 
 Building for the Pi from another machine needs `docker buildx` (`--platform
@@ -65,6 +66,7 @@ database.
 | `VOIPD_VOICEMAIL_DIR` | voicemail directory, shared with Asterisk's recording directory (default `/var/lib/voipd/voicemail`) |
 | `VOIPD_BACKUP_DIR` | scheduled backups (default `/var/lib/voipd/backups`, inside the data volume; mount another disk there) |
 | `VOIPD_LDAP_LISTEN` | LDAP phone book (default `[::]:389`, empty disables it) |
+| `VOIPD_LDAPS_LISTEN` | LDAPS phone book with voipd's certificate (default `[::]:636`, empty disables it) |
 | `VOIPD_RUN_AS` | `uid:gid` voipd switches to when started as root (default `65532:65532`) |
 | `VOIPD_HTTP_LISTEN`, `VOIPD_PUBLIC_URL` | web UI listen address (default `[::]:8080`) and the URL users open |
 | `VOIPD_OIDC_ISSUER`, `…_CLIENT_ID`, `…_CLIENT_SECRET` | authentik/OIDC login; redirect URI is `<public url>/auth/callback` |
@@ -158,8 +160,8 @@ each kind of phone.
   `https://<voipd>/dav/` with the account; the address books are
   `/dav/<account>/books/contacts/` and `…/extensions/`.
 
-The directory is read-only. LDAP is unencrypted: keep it to the LAN and
-WireGuard.
+The directory is read-only. Plain LDAP is unencrypted: keep it to the LAN
+and WireGuard, or use LDAPS on port 636 (import voipd's CA on the phone).
 
 ## Backups
 
@@ -206,6 +208,23 @@ Under *System → Security*:
   request from that address, survive restarts, can be lifted or added by
   hand, and are reported by e-mail (admins), MQTT and webhooks
   (`security.banned`).
+
+## TLS and SRTP for phones
+
+voipd runs its own certificate authority. On first start it creates the CA
+(20 years) and a server certificate for this host's name, its IPv4
+addresses and any extra names set under *System → Security*; it renews the
+server certificate a month before it expires or when the addresses change,
+and Asterisk picks it up without a restart. Phones connect with TLS on port
+5061: import the CA from `http://<voipd>/ca.pem` (or `/ca.crt`, DER) as a
+trusted certificate, or switch off server verification on the phone. An
+extension with SRTP must use the TLS transport (SDES keys travel in the SIP
+messages). `VOIPD_TLS_CERT_FILE`/`VOIPD_TLS_KEY_FILE` still replace the
+certificate for SIP if set. The CA is part of the configuration export (its
+key only in the encrypted file), so phones keep trusting a restored voipd.
+
+LDAPS (port 636, `VOIPD_LDAPS_LISTEN`) serves the phone book with the same
+certificate.
 
 ## Integrations
 
@@ -300,10 +319,11 @@ test/e2e/integrations.sh # Mosquitto, mailpit, webhook receiver: events, e-mail 
 test/e2e/voicemail.sh   # leave a message, message waiting light, *98 listen and delete (~1 min)
 test/e2e/backup.sh      # backups with rotation, config export/edit/import reaching Asterisk, encrypted
                         # export restoring a deleted phone, full restore through a restart (~1 min)
-test/e2e/security.sh    # phone ACL (refused outside allowed networks, line unaffected), ban after
-                        # wrong passwords, unban (~1 min)
+test/e2e/security.sh    # phone over TLS verifying voipd's CA, SRTP call; phone ACL (refused outside
+                        # allowed networks, line unaffected); ban after wrong passwords, unban (~2 min)
 test/e2e/directory.sh   # voipd image with the compose security settings: LDAP on 389 as the phones
-                        # search, unprivileged afterwards, CardDAV (~3 min with image build)
+                        # search, LDAPS on 636 verified against voipd's CA, unprivileged
+                        # afterwards, CardDAV (~3 min with image build)
 ```
 
 UI development: `go run ./test/devseed -db /tmp/demo.db` creates demo data;

@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"voipd/internal/auth"
 	"voipd/internal/backup"
 	"voipd/internal/callflow"
+	"voipd/internal/certs"
 	"voipd/internal/config"
 	"voipd/internal/directory"
 	"voipd/internal/engine"
@@ -90,10 +92,13 @@ func run() error {
 
 	// Privileged ports first, then give up root (the container starts
 	// voipd as root with only the capabilities needed for this).
-	var ldapLn net.Listener
-	var ldapErr error
+	var ldapLn, ldapsLn net.Listener
+	var ldapErr, ldapsErr error
 	if cfg.LDAP.Listen != "" && !*migrateOnly {
 		ldapLn, ldapErr = net.Listen("tcp", cfg.LDAP.Listen)
+	}
+	if cfg.LDAP.TLSListen != "" && !*migrateOnly {
+		ldapsLn, ldapsErr = net.Listen("tcp", cfg.LDAP.TLSListen)
 	}
 	if err := dropPrivileges(cfg.RunAs, log); err != nil {
 		return err
@@ -155,6 +160,14 @@ func run() error {
 		TLSCertFile: cfg.Network.TLSCertFile,
 		TLSKeyFile:  cfg.Network.TLSKeyFile,
 	})
+	certMgr := certs.New(st, cfg.Asterisk.GeneratedDir, cfg.Asterisk.EngineGeneratedDir, log.With("component", "certs"))
+	if _, err := certMgr.Ensure(ctx); err != nil {
+		return fmt.Errorf("certificates: %w", err)
+	}
+	ownCert := cfg.Network.TLSCertFile == "" || cfg.Network.TLSKeyFile == ""
+	if ownCert {
+		conf.SetTLS(certMgr.EngineFiles())
+	}
 	guard := security.New(st, bus, netCfg.LocalNets, conf.ApplyAccess, log.With("component", "security"))
 	if err := guard.Load(ctx); err != nil {
 		return fmt.Errorf("load SIP access settings: %w", err)
@@ -180,6 +193,11 @@ func run() error {
 	phonebook := directory.New(st, nums, log.With("component", "directory"))
 	dirAccounts := directory.NewAccounts(st)
 	ldapSrv := directory.NewLDAP(phonebook, dirAccounts, nums, log.With("component", "ldap"))
+	ldapsSrv := directory.NewLDAP(phonebook, dirAccounts, nums, log.With("component", "ldaps"))
+	if ldapsErr != nil {
+		log.Warn("LDAPS phone book not available: cannot listen", "addr", cfg.LDAP.TLSListen, "err", ldapsErr)
+		ldapsSrv.SetError(cfg.LDAP.TLSListen, ldapsErr)
+	}
 	carddavSrv := directory.NewCardDAV(phonebook, dirAccounts, log.With("component", "carddav"))
 	if ldapErr != nil {
 		log.Warn("LDAP phone book not available: cannot listen (port 389 needs the container settings from "+
@@ -200,6 +218,12 @@ func run() error {
 			}
 		}
 		errs = append(errs, mods.RestartAll(), vm.PublishAll(ctx))
+		if changed, err := certMgr.Reload(ctx); err != nil {
+			errs = append(errs, err)
+		} else if changed && ownCert {
+			conf.SetTLS(certMgr.EngineFiles())
+			errs = append(errs, conf.Apply(ctx))
+		}
 		dirAccounts.ForgetAll()
 		phonebook.Invalidate()
 		return errors.Join(errs...)
@@ -215,7 +239,8 @@ func run() error {
 			Store: st, Numbers: nums, Config: conf, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
 			Stats: statistics, Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
 			Directory: phonebook, DirectoryAccounts: dirAccounts, LDAP: ldapSrv, CardDAV: carddavSrv,
-			Backup: backups, AfterImport: afterImport, Security: guard, Restart: stop, Log: log.With("component", "web"), UI: webui.FS(),
+			Backup: backups, AfterImport: afterImport, Security: guard, Certs: certMgr, OwnCert: ownCert, LDAPS: ldapsSrv,
+			SetTLS: conf.SetTLS, Restart: stop, Log: log.With("component", "web"), UI: webui.FS(),
 			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -235,7 +260,7 @@ func run() error {
 		}
 		httpDone <- nil
 	}()
-	wg.Add(9)
+	wg.Add(10)
 	if ldapLn != nil {
 		wg.Add(1)
 		go func() {
@@ -247,12 +272,24 @@ func run() error {
 			}
 		}()
 	}
+	if ldapsLn != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Info("LDAPS phone book listening", "addr", ldapsLn.Addr())
+			if err := ldapsSrv.Serve(ctx, tls.NewListener(ldapsLn, certMgr.TLSConfig())); err != nil {
+				log.Error("LDAPS server stopped", "err", err)
+				ldapsSrv.SetError(cfg.LDAP.TLSListen, err)
+			}
+		}()
+	}
 	go func() { defer wg.Done(); mods.Run(ctx) }()
 	go func() { defer wg.Done(); screen.Run(ctx) }()
 	go func() { defer wg.Done(); syncer.Run(ctx) }()
 	go func() { defer wg.Done(); cleanupLoop(ctx, authSvc) }()
 	go func() { defer wg.Done(); backups.Run(ctx) }()
 	go func() { defer wg.Done(); guard.Run(ctx) }()
+	go func() { defer wg.Done(); certLoop(ctx, certMgr, conf, ownCert, log) }()
 	go func() { defer wg.Done(); superviseLoop(ctx, sup, cfg.Trunks, log) }()
 	go func() { defer wg.Done(); watchNetwork(ctx, cfg, conf, sup, log) }()
 	go func() { defer wg.Done(); watchDNS(ctx, cfg, conf, sup, log) }()
@@ -283,6 +320,31 @@ func cleanupLoop(ctx context.Context, a *auth.Service) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		}
+	}
+}
+
+// certLoop renews the server certificate when it nears expiry or this
+// host's names or addresses change.
+func certLoop(ctx context.Context, m *certs.Manager, conf *pbx.Configurator, own bool, log *slog.Logger) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		changed, err := m.Ensure(ctx)
+		if err != nil {
+			log.Error("renew TLS certificate", "err", err)
+			continue
+		}
+		if changed && own {
+			conf.SetTLS(m.EngineFiles())
+			if err := conf.Apply(ctx); err != nil {
+				log.Error("apply new TLS certificate", "err", err)
+			}
 		}
 	}
 }

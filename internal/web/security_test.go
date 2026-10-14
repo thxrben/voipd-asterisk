@@ -1,7 +1,9 @@
 package web
 
 import (
+	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -36,4 +38,26 @@ func TestSecurityAPI(t *testing.T) {
 	a.send("DELETE", "/api/v1/security/bans?ip="+url.QueryEscape("203.0.113.9/32"), nil, 204)
 	a.send("DELETE", "/api/v1/security/bans?ip="+url.QueryEscape("203.0.113.9/32"), nil, 404)
 	a.send("POST", "/api/v1/security/bans", map[string]any{"ip": "localhost", "minutes": 0}, 422)
+
+	// Certificates: status, extra names, renewal; the CA is public.
+	a.getJSON("/api/v1/security", 200, &v)
+	if v.TLS == nil || !v.TLS.Own || v.TLS.CAFingerprint == "" || len(v.TLS.ExtraNames) != 0 {
+		t.Fatalf("tls: %+v", v.TLS)
+	}
+	before := v.TLS.ServerFingerprint
+	a.send("PUT", "/api/v1/security/tls", map[string]any{"names": []string{"no good!"}}, 422)
+	res = a.send("PUT", "/api/v1/security/tls", map[string]any{"names": []string{"pbx.home.arpa"}}, 200)
+	tls := res["result"].(map[string]any)["tls"].(map[string]any)
+	if tls["server_fingerprint"] == before || !strings.Contains(fmt.Sprint(tls["dns_names"]), "pbx.home.arpa") {
+		t.Fatalf("names not applied: %v", tls)
+	}
+	a.send("POST", "/api/v1/security/tls/renew", nil, 200)
+	anon := e.client()
+	resp, body := anon.download("/ca.pem", 200)
+	if !strings.HasPrefix(string(body), "-----BEGIN CERTIFICATE-----") || !strings.Contains(resp.Header.Get("Content-Disposition"), "voipd-ca.pem") {
+		t.Fatalf("ca.pem: %s", body)
+	}
+	if _, der := anon.download("/ca.crt", 200); der[0] != 0x30 {
+		t.Fatal("ca.crt is not DER")
+	}
 }

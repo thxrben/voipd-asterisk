@@ -33,16 +33,19 @@ func (s *Server) directoryInfo(w http.ResponseWriter, r *http.Request) {
 			contacts++
 		}
 	}
-	ldap := map[string]any{"listening": false, "port": 0, "error": ""}
-	if s.d.LDAP != nil {
-		listening, addr, lastErr := s.d.LDAP.Status()
-		ldap["listening"], ldap["error"] = listening, lastErr
-		if _, port, err := net.SplitHostPort(addr); err == nil {
-			ldap["port"], _ = strconv.Atoi(port)
+	status := func(l *directory.LDAP) map[string]any {
+		st := map[string]any{"listening": false, "port": 0, "error": ""}
+		if l != nil {
+			listening, addr, lastErr := l.Status()
+			st["listening"], st["error"] = listening, lastErr
+			if _, port, err := net.SplitHostPort(addr); err == nil {
+				st["port"], _ = strconv.Atoi(port)
+			}
 		}
+		return st
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ldap": ldap, "base_dn": directory.BaseDN, "carddav_path": directory.DAVPrefix + "/",
+		"ldap": status(s.d.LDAP), "ldaps": status(s.d.LDAPS), "base_dn": directory.BaseDN, "carddav_path": directory.DAVPrefix + "/",
 		"accounts": accounts, "contacts": contacts, "extensions": exts,
 	})
 }

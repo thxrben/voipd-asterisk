@@ -428,6 +428,7 @@ func (s *Server) extensionCredentials(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"username": e.SIPUsername, "password": e.SIPPassword, "auth_username": e.SIPUsername,
 		"transport": e.Transport, "port": map[string]int{"udp": 5060, "tcp": 5060, "tls": 5061}[e.Transport],
+		"srtp": e.SRTP, "ca_url": "/ca.pem",
 	})
 }
 

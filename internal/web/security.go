@@ -1,9 +1,13 @@
 package web
 
 import (
+	"encoding/pem"
 	"net/http"
 	"net/netip"
+	"strings"
 
+	"voipd/internal/admin"
+	"voipd/internal/certs"
 	"voipd/internal/security"
 	"voipd/internal/store"
 )
@@ -16,8 +20,15 @@ type securityView struct {
 	Recent   []security.Failure `json:"recent"`
 	// ClientIP is the browser's address; ClientAllowed whether a phone at
 	// that address would be let in.
-	ClientIP      string `json:"client_ip"`
-	ClientAllowed bool   `json:"client_allowed"`
+	ClientIP      string   `json:"client_ip"`
+	ClientAllowed bool     `json:"client_allowed"`
+	TLS           *tlsView `json:"tls,omitempty"`
+}
+
+type tlsView struct {
+	certs.Status
+	// Own: SIP-TLS uses voipd's certificate (not VOIPD_TLS_CERT_FILE).
+	Own bool `json:"own"`
 }
 
 func prefixStrings(ps []netip.Prefix) []string {
@@ -33,6 +44,14 @@ func (s *Server) securityView(r *http.Request) securityView {
 	acl := g.ACL()
 	v := securityView{Settings: g.Settings(), AutoNets: prefixStrings(g.AutoNets()), ACL: prefixStrings(acl),
 		Bans: g.Bans(), Recent: g.Recent(), ClientIP: s.clientIP(r), ClientAllowed: acl == nil}
+	if s.d.Certs != nil {
+		st := s.d.Certs.Status()
+		st.ExtraNames, _ = s.d.Certs.ExtraNames(r.Context())
+		if st.ExtraNames == nil {
+			st.ExtraNames = []string{}
+		}
+		v.TLS = &tlsView{Status: st, Own: s.d.OwnCert}
+	}
 	if ip, err := netip.ParseAddr(v.ClientIP); err == nil {
 		for _, p := range acl {
 			if p.Contains(ip.Unmap()) {
@@ -60,6 +79,57 @@ func (s *Server) saveSecuritySettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"result": s.securityView(r)})
+}
+
+// saveTLSNames sets extra names for the server certificate and reissues it.
+func (s *Server) saveTLSNames(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Names []string `json:"names"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if err := s.d.Certs.SetExtraNames(r.Context(), in.Names); err != nil {
+		s.writeErr(w, r, admin.Errors{"names": err.Error()})
+		return
+	}
+	s.recordAudit(r, "tls.names", "", in.Names)
+	s.applyCert(w, r)
+}
+
+func (s *Server) renewCert(w http.ResponseWriter, r *http.Request) {
+	if err := s.d.Certs.Renew(r.Context()); err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	s.recordAudit(r, "tls.renew", "", nil)
+	s.applyCert(w, r)
+}
+
+// applyCert hands the (new) certificate to Asterisk.
+func (s *Server) applyCert(w http.ResponseWriter, r *http.Request) {
+	if s.d.OwnCert && s.d.SetTLS != nil {
+		s.d.SetTLS(s.d.Certs.EngineFiles())
+	}
+	s.writeResult(w, r, nil, http.StatusOK, s.securityView(r))
+}
+
+// caCert serves the CA certificate for phones: PEM, or DER as .crt.
+func (s *Server) caCert(w http.ResponseWriter, r *http.Request) {
+	data := s.d.Certs.CAPEM()
+	name := "voipd-ca.pem"
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	if strings.HasSuffix(r.URL.Path, ".crt") {
+		b, _ := pem.Decode(data)
+		if b == nil {
+			writeError(w, http.StatusNotFound, "no CA yet")
+			return
+		}
+		data, name = b.Bytes, "voipd-ca.crt"
+		w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Write(data)
 }
 
 func (s *Server) banIP(w http.ResponseWriter, r *http.Request) {

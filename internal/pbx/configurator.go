@@ -81,6 +81,14 @@ func (c *Configurator) ApplyAccess(ctx context.Context, acl, banned []netip.Pref
 	return c.Apply(ctx)
 }
 
+// SetTLS sets the certificate and key files of the TLS transports (paths
+// as the engine sees them) for the next Apply.
+func (c *Configurator) SetTLS(cert, key string) {
+	c.mu.Lock()
+	c.net.TLSCertFile, c.net.TLSKeyFile = cert, key
+	c.mu.Unlock()
+}
+
 // Hosts returns registrar hosts and their registrations, for DNS watching.
 func (c *Configurator) Hosts() trunks.Hosts {
 	c.mu.Lock()

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Phone directory end to end: the voipd image with the compose security
 # settings (root with only NET_BIND_SERVICE/SETUID/SETGID, then dropping to
-# an unprivileged user) serves LDAP on port 389 and CardDAV under /dav/.
+# an unprivileged user) serves LDAP on port 389, LDAPS on 636 with voipd's
+# own certificate, and CardDAV under /dav/.
 #
 #   test/e2e/directory.sh       (builds voipd:dev; ~3 min the first time)
 source "$(dirname "$0")/lib.sh"
@@ -31,6 +32,8 @@ wait_for "voipd up" 30 up
 ldap_up() { ss -ltn | grep -q ':389 '; }
 wait_for "LDAP on port 389" 10 ldap_up
 ldap_up && ok "LDAP listening on port 389"
+ldaps_up() { ss -ltn | grep -q ':636 '; }
+wait_for "LDAPS on port 636" 10 ldaps_up
 PID=$(docker inspect -f '{{.State.Pid}}' "$C")
 check "voipd runs unprivileged after binding" "$(id -u) $(id -u)" "$(awk '/^Uid:/ {print $2, $3}' /proc/$PID/status)"
 check "no capabilities left" 0000000000000000 "$(awk '/^CapEff:/ {print $2}' /proc/$PID/status)"
@@ -57,6 +60,16 @@ check "Gigaset filter" "Jonas" "$(lq phones "$PW" '(&(objectClass=person)(|(cn=J
 check "extensions are in the book" "Kitchen	10" "$(lq phones "$PW" '(telephoneNumber=10)')"
 check "anonymous search refused" 1 "$("$WORK/ldapcheck" -addr 127.0.0.1:389 -filter '(cn=*)' | grep -c 'Code 50')"
 check "wrong password refused" 1 "$(lq phones wrong '(cn=*)' | grep -c 'Code 49')"
+
+log "LDAPS with voipd's certificate authority"
+curl -s "$API/ca.pem" -o "$WORK/ca.pem"
+check "CA downloadable without login" 1 "$(grep -c 'BEGIN CERTIFICATE' "$WORK/ca.pem")"
+check "search over LDAPS, server verified" "Mom	01701234567" \
+	"$("$WORK/ldapcheck" -addr 127.0.0.1:636 -ca "$WORK/ca.pem" -user phones -pass "$PW" -filter '(cn=Mom*)' 2>&1)"
+openssl_ok() { openssl s_client -connect 127.0.0.1:636 -CAfile "$WORK/ca.pem" -verify_return_error </dev/null 2>/dev/null | grep -q 'Verify return code: 0'; }
+if command -v openssl >/dev/null; then
+	openssl_ok && ok "certificate chain verifies with openssl" || bad "certificate chain verifies with openssl"
+fi
 
 log "CardDAV"
 report() {

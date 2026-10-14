@@ -32,7 +32,7 @@ services:
     image: voipd:dev
     network_mode: host
     restart: unless-stopped
-    # voipd opens the LDAP phone book port 389, then switches to user 65532
+    # voipd opens the LDAP phone book ports 389 and 636, then switches to user 65532
     # (VOIPD_RUN_AS) before doing anything else. It only gets the
     # capabilities for exactly that.
     user: "0:0"

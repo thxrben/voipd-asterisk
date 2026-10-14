@@ -46,6 +46,11 @@ while [ ! -s /etc/asterisk/voipd/pjsip_voipd.conf ] && [ "$wait" -gt 0 ]; do
     wait=$((wait - 1))
 done
 [ -s /etc/asterisk/voipd/pjsip_voipd.conf ] || echo "WARNING: starting without voipd config; restart Asterisk once voipd runs"
+# Subdirectories voipd created before this (tls/ with the certificate key,
+# readable by the group only) must belong to the asterisk group too; the
+# setgid bit keeps it that way for files voipd writes later.
+chgrp -R asterisk /etc/asterisk/voipd
+find /etc/asterisk/voipd -type d -exec chmod g+rxs {} +
 chown -R asterisk:asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk
 find /var/spool/asterisk -path /var/spool/asterisk/recording -prune -o -exec chown asterisk:asterisk {} +
 

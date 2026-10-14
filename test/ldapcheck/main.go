@@ -2,11 +2,15 @@
 // line per entry: "cn<TAB>telephoneNumber,mobile,homePhone". For e2e tests.
 //
 //	go run ./test/ldapcheck -addr 127.0.0.1:389 -user phones -pass … -filter '(cn=Mom*)'
+//	go run ./test/ldapcheck -addr 127.0.0.1:636 -ca voipd-ca.pem …   (LDAPS, verified)
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -19,9 +23,23 @@ func main() {
 	pass := flag.String("pass", "", "password")
 	base := flag.String("base", "dc=voipd", "search base")
 	filter := flag.String("filter", "(objectClass=person)", "search filter")
+	ca := flag.String("ca", "", "CA certificate (PEM): connect with LDAPS and verify the server against it")
 	flag.Parse()
 
-	c, err := ldap.DialURL("ldap://" + *addr)
+	url, opts := "ldap://"+*addr, []ldap.DialOpt{}
+	if *ca != "" {
+		pem, err := os.ReadFile(*ca)
+		if err != nil {
+			fmt.Println("error:", err)
+			os.Exit(1)
+		}
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(pem)
+		host, _, _ := net.SplitHostPort(*addr)
+		url = "ldaps://" + *addr
+		opts = append(opts, ldap.DialWithTLSConfig(&tls.Config{RootCAs: pool, ServerName: host}))
+	}
+	c, err := ldap.DialURL(url, opts...)
 	if err != nil {
 		fmt.Println("error:", err)
 		os.Exit(1)

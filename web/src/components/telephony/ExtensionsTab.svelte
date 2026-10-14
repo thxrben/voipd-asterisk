@@ -221,7 +221,9 @@
   {#if creds}
     <p class="muted intro">Enter these into the phone's SIP account settings.</p>
     <dl>
-      {#each [['Server / registrar', server], ['Port', String(creds.port)], ['Transport', creds.transport.toUpperCase()], ['Username', creds.username], ['Authentication user', creds.auth_username], ['Password', creds.password]] as [k, v] (k)}
+      {#each [['Server / registrar', server], ['Port', String(creds.port)], ['Transport', creds.transport.toUpperCase()],
+        ...(creds.srtp ? [['Media encryption', 'SRTP (SDES), mandatory']] : []),
+        ['Username', creds.username], ['Authentication user', creds.auth_username], ['Password', creds.password]] as [k, v] (k)}
         <dt>{k}</dt>
         <dd>
           <code>{v}</code>
@@ -229,6 +231,13 @@
         </dd>
       {/each}
     </dl>
+    {#if creds.transport === 'tls'}
+      <p class="muted intro">
+        For TLS the phone must trust voipd's certificate authority: import
+        <a href={creds.ca_url} download>voipd-ca.pem</a> (or <a href="/ca.crt" download>.crt</a>) as a trusted
+        certificate, or switch off server certificate verification.
+      </p>
+    {/if}
   {/if}
   {#snippet footer()}
     <button onclick={regenerate}>New password</button>

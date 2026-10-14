@@ -34,6 +34,8 @@ type Config struct {
 // LDAP is the phone book server for desk phones.
 type LDAP struct {
 	Listen string `yaml:"listen"` // "" disables it
+	// TLSListen serves LDAPS with voipd's own certificate; "" disables it.
+	TLSListen string `yaml:"tls_listen"`
 }
 
 type Network struct {
@@ -80,6 +82,9 @@ type Asterisk struct {
 	// GeneratedDir is where voipd writes generated Asterisk config
 	// (pjsip_voipd.conf), shared with the Asterisk container.
 	GeneratedDir string `yaml:"generated_dir"`
+	// EngineGeneratedDir is the same directory as Asterisk sees it (for
+	// file paths in the generated config, e.g. TLS certificates).
+	EngineGeneratedDir string `yaml:"engine_generated_dir"`
 
 	ReconnectMin time.Duration `yaml:"reconnect_min"`
 	ReconnectMax time.Duration `yaml:"reconnect_max"`
@@ -133,14 +138,15 @@ type Numbers struct {
 func Default() Config {
 	return Config{
 		Asterisk: Asterisk{
-			ARIURL:       "http://127.0.0.1:8088",
-			ARIUser:      "voipd",
-			App:          "voipd",
-			AMIAddr:      "127.0.0.1:5038",
-			AMIUser:      "voipd",
-			GeneratedDir: "/etc/asterisk/voipd",
-			ReconnectMin: time.Second,
-			ReconnectMax: 30 * time.Second,
+			ARIURL:             "http://127.0.0.1:8088",
+			ARIUser:            "voipd",
+			App:                "voipd",
+			AMIAddr:            "127.0.0.1:5038",
+			AMIUser:            "voipd",
+			GeneratedDir:       "/etc/asterisk/voipd",
+			EngineGeneratedDir: "/etc/asterisk/voipd",
+			ReconnectMin:       time.Second,
+			ReconnectMax:       30 * time.Second,
 		},
 		Store: Store{Path: "/var/lib/voipd/voipd.db", VoicemailDir: "/var/lib/voipd/voicemail",
 			BackupDir: "/var/lib/voipd/backups"},
@@ -152,7 +158,7 @@ func Default() Config {
 			SessionMax:  7 * 24 * time.Hour,
 		},
 		HTTP:    HTTP{Listen: "[::]:8080"},
-		LDAP:    LDAP{Listen: "[::]:389"},
+		LDAP:    LDAP{Listen: "[::]:389", TLSListen: "[::]:636"},
 		RunAs:   "65532:65532",
 		Numbers: Numbers{Country: "DE"},
 		Trunks: Trunks{
@@ -204,6 +210,7 @@ func applyEnv(c *Config) {
 		"VOIPD_BACKUP_DIR":    &c.Store.BackupDir,
 		"VOIPD_HTTP_LISTEN":   &c.HTTP.Listen,
 		"VOIPD_LDAP_LISTEN":   &c.LDAP.Listen,
+		"VOIPD_LDAPS_LISTEN":  &c.LDAP.TLSListen,
 		"VOIPD_RUN_AS":        &c.RunAs,
 		"VOIPD_COUNTRY":       &c.Numbers.Country,
 		"VOIPD_AREA_CODE":     &c.Numbers.AreaCode,

@@ -19,6 +19,7 @@ import (
 	"voipd/internal/auth"
 	"voipd/internal/backup"
 	"voipd/internal/callflow"
+	"voipd/internal/certs"
 	"voipd/internal/directory"
 	"voipd/internal/engine"
 	"voipd/internal/events"
@@ -80,7 +81,14 @@ type Deps struct {
 	// Restart ends voipd so that it is restarted (after staging a restore).
 	Restart func()
 	// Security is the SIP access control (ACL, bans); optional.
-	Security       *security.Guard
+	Security *security.Guard
+	// Certs is voipd's own CA and server certificate; optional. OwnCert
+	// reports whether SIP-TLS uses it (not VOIPD_TLS_CERT_FILE).
+	Certs   *certs.Manager
+	OwnCert bool
+	// SetTLS hands new certificate files to the SIP configuration.
+	SetTLS         func(cert, key string)
+	LDAPS          *directory.LDAP
 	Log            *slog.Logger
 	UI             fs.FS // built web UI (index.html + assets); nil = none
 	DataDir        string
@@ -122,6 +130,11 @@ func New(d Deps) http.Handler {
 		r.Handle("/.well-known/carddav", d.CardDAV)
 	}
 
+	if d.Certs != nil {
+		// Public: phones and softphones import it to trust voipd.
+		r.Get("/ca.pem", s.caCert)
+		r.Get("/ca.crt", s.caCert)
+	}
 	r.Route("/auth", func(r chi.Router) {
 		r.Get("/config", s.authConfig)
 		r.Get("/login", d.Auth.Login)
@@ -212,6 +225,10 @@ func New(d Deps) http.Handler {
 				r.Put("/security/settings", s.saveSecuritySettings)
 				r.Post("/security/bans", s.banIP)
 				r.Delete("/security/bans", s.unbanIP)
+				if d.Certs != nil {
+					r.Put("/security/tls", s.saveTLSNames)
+					r.Post("/security/tls/renew", s.renewCert)
+				}
 			}
 
 			r.Get("/modules", s.listModules)

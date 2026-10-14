@@ -89,6 +89,7 @@
   }
 
   const ldapPort = $derived(info?.ldap.port || 389)
+  const ldapsPort = $derived(info?.ldaps?.port || 636)
   const clients = $derived([
     {
       name: 'Yealink', where: 'Directory → LDAP',
@@ -97,6 +98,7 @@
         ['User name', user], ['Name filter', '(|(cn=%)(sn=%))'],
         ['Number filter', '(|(telephoneNumber=%)(mobile=%)(homePhone=%))'], ['Display name', 'cn'],
         ['Number attributes', 'telephoneNumber mobile homePhone'], ['LDAP version', '3'], ['Lookup for incoming calls', 'on'],
+        ['Encrypted (LDAPS)', `server ldaps://${host}, port ${ldapsPort}, import voipd's CA`],
       ],
     },
     {
@@ -153,6 +155,13 @@
             {:else}<span class="dot bad"></span> not available{/if}
           </span>
           {#if !info.ldap.listening && info.ldap.error}<span></span><span class="error small">{info.ldap.error}</span>{/if}
+          <span>LDAPS</span>
+          <span>
+            {#if info.ldaps.listening}<span class="dot good"></span> listening on port {info.ldaps.port}
+              <span class="muted small">(certificate from voipd's CA, <a href="/ca.pem" download>download</a>)</span>
+            {:else}<span class="dot bad"></span> not available{/if}
+          </span>
+          {#if !info.ldaps.listening && info.ldaps.error}<span></span><span class="error small">{info.ldaps.error}</span>{/if}
           <span>CardDAV</span><span class="mono small">{davURL}</span>
           <span>Entries</span><span>{info.contacts} contacts · {info.extensions} phones</span>
         </div>

@@ -128,14 +128,14 @@ func (s *Store) UpdateLeg(ctx context.Context, l CallLeg) error {
 
 // AddCallEvent appends to a call's timeline. detail is marshalled to JSON.
 func (s *Store) AddCallEvent(ctx context.Context, callID string, at time.Time, typ string, detail any) error {
-	b := []byte("{}")
-	if detail != nil {
-		var err error
-		if b, err = json.Marshal(detail); err != nil {
-			return err
-		}
+	b, err := json.Marshal(detail)
+	if err != nil {
+		return err
 	}
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO call_events(call_id, at, type, detail) VALUES(?, ?, ?, ?)`,
+	if string(b) == "null" { // also a nil map, not only a nil interface
+		b = []byte("{}")
+	}
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO call_events(call_id, at, type, detail) VALUES(?, ?, ?, ?)`,
 		callID, at.UnixMilli(), typ, string(b))
 	return err
 }

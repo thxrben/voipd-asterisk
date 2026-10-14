@@ -84,6 +84,9 @@ func (s *Store) AddSIPEvent(ctx context.Context, at time.Time, typ, subject stri
 	if err != nil {
 		return err
 	}
+	if string(b) == "null" {
+		b = []byte("{}")
+	}
 	_, err = s.DB.ExecContext(ctx, `INSERT INTO sip_events(at, type, subject, detail) VALUES(?, ?, ?, ?)`,
 		at.UnixMilli(), typ, subject, string(b))
 	return err

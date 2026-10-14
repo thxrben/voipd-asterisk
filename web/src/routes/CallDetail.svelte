@@ -41,9 +41,11 @@
     'route.no_targets': 'No phone available',
     'dial.trunk': 'Dialing out',
     'dial.invalid': 'Invalid number dialed',
-    'dial.no_line': 'No outgoing line',
+    'dial.no_line': 'No outgoing line (no enabled line with a number)',
+    'max_duration': 'Ended at the maximum call duration',
   }
-  function eventText(t: string, d: Record<string, unknown>): string {
+  function eventText(t: string, detail: Record<string, unknown> | null): string {
+    const d = detail ?? {} // older events stored "no details" as null
     const parts: string[] = []
     if (Array.isArray(d['extensions'])) parts.push(`extensions ${(d['extensions'] as string[]).join(', ')}`)
     if (d['answered_by']) parts.push(`by ext. ${d['answered_by'] as string}`)

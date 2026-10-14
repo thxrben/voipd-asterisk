@@ -49,7 +49,8 @@
     if (t.endsWith('.down')) return 'bad'
     return 'warn'
   }
-  function detailText(d: Record<string, unknown>): string {
+  function detailText(detail: Record<string, unknown> | null): string {
+    const d = detail ?? {}
     const p: string[] = []
     if (d['number']) p.push(phone(String(d['number'])))
     if (d['action']) p.push(`${d['action'] as string}${d['attempt'] ? ` #${d['attempt'] as number}` : ''}`)

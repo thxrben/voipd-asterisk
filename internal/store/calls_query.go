@@ -200,7 +200,7 @@ func (s *Store) CallDetail(ctx context.Context, id string) ([]LegDetail, []CallE
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
 	}
-	erows, err := s.DB.QueryContext(ctx, `SELECT at, type, detail FROM call_events WHERE call_id = ? ORDER BY at, id`, id)
+	erows, err := s.DB.QueryContext(ctx, `SELECT at, type, CASE WHEN detail = 'null' THEN '{}' ELSE detail END FROM call_events WHERE call_id = ? ORDER BY at, id`, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -222,7 +222,7 @@ func (s *Store) CallDetail(ctx context.Context, id string) ([]LegDetail, []CallE
 // SIPEvents returns general events newest first (trunk state etc.).
 func (s *Store) SIPEvents(ctx context.Context, prefix string, limit int) ([]SIPEvent, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT at, type, subject, detail FROM sip_events WHERE type LIKE ? ESCAPE '\'
+		SELECT at, type, subject, CASE WHEN detail = 'null' THEN '{}' ELSE detail END FROM sip_events WHERE type LIKE ? ESCAPE '\'
 		ORDER BY at DESC, id DESC LIMIT ?`, escapeLike(prefix)+"%", limit)
 	if err != nil {
 		return nil, err

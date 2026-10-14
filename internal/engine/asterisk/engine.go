@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
@@ -429,12 +430,37 @@ func (e *Engine) Originate(ctx context.Context, r engine.OriginateRequest) error
 	if r.Originator != "" {
 		dq.Set("caller", r.Originator)
 	}
-	if err := e.ari.do(ctx, "POST", "/channels/"+url.PathEscape(r.ID)+"/dial", dq, nil, nil); err != nil {
+	if err := e.dialWhenReady(ctx, r.ID, dq); err != nil {
 		// Don't leave a created-but-undialed channel behind.
 		_ = e.Hangup(context.WithoutCancel(ctx), r.ID, engine.HangupCongestion)
 		return fmt.Errorf("dial: %w", err)
 	}
 	return nil
+}
+
+// dialReadyWait bounds how long dial waits for a created channel to enter
+// the Stasis application.
+var dialReadyWait = 2 * time.Second
+
+// dialWhenReady dials a channel made by channels/create. The channel enters
+// the application asynchronously; on a slow machine (a Raspberry Pi) a dial
+// right after create can come too early and gets 409 "Channel not in Stasis
+// application". That is retried briefly; other errors are not.
+func (e *Engine) dialWhenReady(ctx context.Context, id string, q url.Values) error {
+	deadline := time.Now().Add(dialReadyWait)
+	for wait := 10 * time.Millisecond; ; wait = min(wait*2, 200*time.Millisecond) {
+		err := e.ari.do(ctx, "POST", "/channels/"+url.PathEscape(id)+"/dial", q, nil, nil)
+		var ae *ariError
+		if err == nil || !errors.As(err, &ae) || ae.Status != http.StatusConflict ||
+			!strings.Contains(ae.Body, "not in Stasis") || time.Now().Add(wait).After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(wait):
+		}
+	}
 }
 
 func (e *Engine) CreateBridge(ctx context.Context) (string, error) {

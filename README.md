@@ -29,7 +29,7 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | Phone directory: LDAP (Yealink, Snom, Grandstream, Gigaset) and CardDAV (softphones, FritzBox) | done |
 | Backups: encrypted full backups (scheduled, rotated), restore, configuration as YAML with import preview, call history CSV/JSON | done |
 | Hardening: phone ACL, bans after failed logins, own CA for SIP-TLS/SRTP and LDAPS, call limit, retention, IPv4/IPv6 line failover | done |
-| arm64 build | in progress |
+| arm64 images: native build on the Pi or cross build with buildx (`deploy/build.sh`) | done |
 
 ## Run
 
@@ -46,8 +46,14 @@ voipd starts as root with only the capabilities to open ports 389 and 636
 and to switch users, then
 runs as an unprivileged user without any capabilities.
 
-Building for the Pi from another machine needs `docker buildx` (`--platform
-linux/arm64`); without it, build on the Pi itself.
+### Raspberry Pi (arm64)
+
+Both images build for arm64 unchanged. On the Pi itself `docker compose up
+-d --build` (or `deploy/build.sh`) works with the classic builder; the
+first Asterisk build compiles for about 45 minutes, later builds use the
+cache. To build on a faster machine instead, use buildx with QEMU:
+`deploy/build.sh --platform linux/arm64 --out /tmp/images`, copy the two
+tar files to the Pi and `docker load -i` them, then `docker compose up -d`.
 
 ## Configuration
 

@@ -1,7 +1,7 @@
-# voipd control plane. Pure Go (no cgo), so cross-compiling for the
-# Raspberry Pi is just GOARCH=arm64; with buildx:
-#   docker buildx build --platform linux/arm64,linux/amd64 -t voipd .
-# Without buildx it builds for the host architecture (e.g. on the Pi).
+# voipd control plane. Pure Go (no cgo); deploy/build.sh builds it with the
+# Asterisk image, natively (also with the classic builder, e.g. on the Pi)
+# or for linux/arm64 with buildx. No FROM --platform=$BUILDPLATFORM: the
+# classic builder cannot parse it, so buildx runs these stages emulated.
 # Web UI: built once (it is platform independent) and embedded into voipd.
 FROM node:24-alpine AS ui
 WORKDIR /web

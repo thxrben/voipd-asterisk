@@ -36,6 +36,7 @@ import (
 	"voipd/internal/numbers"
 	"voipd/internal/pbx"
 	"voipd/internal/screening"
+	"voipd/internal/security"
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
@@ -154,6 +155,11 @@ func run() error {
 		TLSCertFile: cfg.Network.TLSCertFile,
 		TLSKeyFile:  cfg.Network.TLSKeyFile,
 	})
+	guard := security.New(st, bus, netCfg.LocalNets, conf.ApplyAccess, log.With("component", "security"))
+	if err := guard.Load(ctx); err != nil {
+		return fmt.Errorf("load SIP access settings: %w", err)
+	}
+	conf.SetAccess(guard.ACL(), guard.Banned())
 	if err := conf.Apply(ctx); err != nil {
 		return fmt.Errorf("apply sip config: %w", err)
 	}
@@ -209,7 +215,7 @@ func run() error {
 			Store: st, Numbers: nums, Config: conf, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
 			Stats: statistics, Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
 			Directory: phonebook, DirectoryAccounts: dirAccounts, LDAP: ldapSrv, CardDAV: carddavSrv,
-			Backup: backups, AfterImport: afterImport, Restart: stop, Log: log.With("component", "web"), UI: webui.FS(),
+			Backup: backups, AfterImport: afterImport, Security: guard, Restart: stop, Log: log.With("component", "web"), UI: webui.FS(),
 			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -229,7 +235,7 @@ func run() error {
 		}
 		httpDone <- nil
 	}()
-	wg.Add(8)
+	wg.Add(9)
 	if ldapLn != nil {
 		wg.Add(1)
 		go func() {
@@ -246,11 +252,12 @@ func run() error {
 	go func() { defer wg.Done(); syncer.Run(ctx) }()
 	go func() { defer wg.Done(); cleanupLoop(ctx, authSvc) }()
 	go func() { defer wg.Done(); backups.Run(ctx) }()
+	go func() { defer wg.Done(); guard.Run(ctx) }()
 	go func() { defer wg.Done(); superviseLoop(ctx, sup, cfg.Trunks, log) }()
 	go func() { defer wg.Done(); watchNetwork(ctx, cfg, conf, sup, log) }()
 	go func() { defer wg.Done(); watchDNS(ctx, cfg, conf, sup, log) }()
 
-	dispatch(ctx, eng, calls, sup, vm, log)
+	dispatch(ctx, eng, calls, sup, vm, guard, log)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx) // SSE streams end with the request contexts
@@ -353,7 +360,7 @@ func policy(t config.Trunks) trunks.Policy {
 
 // dispatch fans engine events out to their consumers until ctx is done.
 func dispatch(ctx context.Context, eng engine.Engine, calls *callflow.Manager, sup *trunks.Supervisor,
-	vm *voicemail.Service, log *slog.Logger) {
+	vm *voicemail.Service, guard *security.Guard, log *slog.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -374,6 +381,8 @@ func dispatch(ctx context.Context, eng engine.Engine, calls *callflow.Manager, s
 				sup.EngineDisconnected(ctx, now, ev.Err)
 			case engine.RegistrationChanged:
 				sup.Observe(ctx, now, ev.Registration)
+			case engine.AuthFailure:
+				guard.Observe(ctx, ev)
 			case engine.ContactStatus:
 				// Trunk AORs share their id with the registration. A trunk
 				// that stops answering OPTIONS is down even if Asterisk

@@ -531,3 +531,32 @@ export interface BackupManifest {
   voicemails: number
   files: number
 }
+
+export interface SecuritySettings {
+  acl_enabled: boolean
+  allowed_nets: string[]
+  ban_enabled: boolean
+  max_failures: number
+  window_minutes: number
+  ban_minutes: number
+}
+
+export interface SipBan {
+  ip: string
+  reason: string
+  failures: number
+  account: string
+  banned_at: string
+  expires_at: string | null
+  manual: boolean
+}
+
+export interface SecurityInfo {
+  settings: SecuritySettings
+  auto_nets: string[]
+  acl: string[]
+  bans: SipBan[]
+  recent: { at: string; ip: string; account: string; kind: 'password' | 'unknown_account' | 'acl' }[]
+  client_ip: string
+  client_allowed: boolean
+}

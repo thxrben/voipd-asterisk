@@ -1,6 +1,9 @@
 package engine
 
-import "time"
+import (
+	"net/netip"
+	"time"
+)
 
 // Event is anything the engine reports. Use a type switch on the concrete
 // types below.
@@ -113,4 +116,13 @@ type RTCP struct {
 	FractionLost float64 // 0..1
 	Jitter       time.Duration
 	RTT          time.Duration
+}
+
+// AuthFailure reports a SIP request that failed authentication: wrong
+// password, unknown account, or refused by an ACL.
+type AuthFailure struct {
+	Meta
+	IP      netip.Addr
+	Account string
+	Kind    string // password | unknown_account | acl
 }

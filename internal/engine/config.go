@@ -21,6 +21,10 @@ type Network struct {
 	// ExternalV4 is the public IPv4 address when behind NAT; filled by the
 	// trunk supervisor's IP watcher. Invalid = not behind NAT / unknown.
 	ExternalV4 netip.Addr
+	// PhoneACL limits where phones may register and call from; nil = any.
+	PhoneACL []netip.Prefix
+	// Banned networks are refused for all SIP requests.
+	Banned []netip.Prefix
 }
 
 type Trunk struct {

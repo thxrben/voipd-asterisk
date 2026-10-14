@@ -29,6 +29,7 @@ import (
 	"voipd/internal/modules/webhook"
 	"voipd/internal/numbers"
 	"voipd/internal/screening"
+	"voipd/internal/security"
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
@@ -159,7 +160,12 @@ func newEnv(t *testing.T, mutate func(*config.Auth)) *env {
 	backups := backup.NewService(st, bus, dataDir+"/backups", dataDir, vmDir, log)
 	ev := &env{t: t, srv: srv, idp: idp, st: st, bus: bus, calls: calls, applied: applied, screen: screen, vmDir: vmDir,
 		backups: backups, restarts: make(chan struct{}, 1)}
-	h = New(Deps{Backup: backups, AfterImport: func(context.Context) error { ev.imports++; return nil },
+	guard := security.New(st, bus, nil, func(context.Context, []netip.Prefix, []netip.Prefix) error { return nil }, log)
+	guard.Interfaces = func() []netip.Prefix { return []netip.Prefix{netip.MustParsePrefix("192.168.1.0/24")} }
+	if err := guard.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h = New(Deps{Backup: backups, Security: guard, AfterImport: func(context.Context) error { ev.imports++; return nil },
 		Restart: func() { ev.restarts <- struct{}{} }, Store: st, Numbers: z, Config: applied, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
 		Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
 		Directory: phonebook, DirectoryAccounts: dirAcc, CardDAV: directory.NewCardDAV(phonebook, dirAcc, log),

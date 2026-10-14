@@ -2,6 +2,7 @@ package asterisk
 
 import (
 	"encoding/json"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -32,6 +33,41 @@ func TestTranslateRecordingEvents(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("%s:\n got %#v\nwant %#v", raw, got, want)
+		}
+	}
+}
+
+func TestTranslateSecurityEvents(t *testing.T) {
+	e := &Engine{}
+	for _, tc := range []struct {
+		msg  Message
+		want *engine.AuthFailure
+	}{
+		{Message{"Event": "ChallengeResponseFailed", "Service": "PJSIP", "AccountID": "kitchen",
+			"RemoteAddress": "IPV4/UDP/192.0.2.10/5060"},
+			&engine.AuthFailure{IP: netip.MustParseAddr("192.0.2.10"), Account: "kitchen", Kind: "password"}},
+		{Message{"Event": "InvalidAccountID", "Service": "PJSIP", "AccountID": "admin",
+			"RemoteAddress": "IPV6/UDP/2001:db8::5/5060"},
+			&engine.AuthFailure{IP: netip.MustParseAddr("2001:db8::5"), Account: "admin", Kind: "unknown_account"}},
+		{Message{"Event": "FailedACL", "Service": "PJSIP", "AccountID": "kitchen",
+			"RemoteAddress": "IPV4/TCP/198.51.100.3/40000"},
+			&engine.AuthFailure{IP: netip.MustParseAddr("198.51.100.3"), Account: "kitchen", Kind: "acl"}},
+		{Message{"Event": "InvalidPassword", "Service": "AMI", "RemoteAddress": "IPV4/TCP/127.0.0.1/1"}, nil},
+		{Message{"Event": "ChallengeResponseFailed", "Service": "PJSIP", "AccountID": "<unknown>",
+			"RemoteAddress": "IPV4/UDP/192.0.2.10/5060"}, nil},
+		{Message{"Event": "InvalidPassword", "Service": "PJSIP", "RemoteAddress": "garbage"}, nil},
+	} {
+		got := e.translateAMI(tc.msg)
+		if tc.want == nil {
+			if got != nil {
+				t.Errorf("%v: got %#v", tc.msg, got)
+			}
+			continue
+		}
+		f, ok := got.(engine.AuthFailure)
+		f.Meta = engine.Meta{}
+		if !ok || f != *tc.want {
+			t.Errorf("%v:\n got %#v\nwant %#v", tc.msg, got, *tc.want)
 		}
 	}
 }

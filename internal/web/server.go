@@ -25,6 +25,7 @@ import (
 	"voipd/internal/modules"
 	"voipd/internal/numbers"
 	"voipd/internal/screening"
+	"voipd/internal/security"
 	"voipd/internal/stats"
 	"voipd/internal/store"
 	"voipd/internal/trunks"
@@ -77,7 +78,9 @@ type Deps struct {
 	// AfterImport re-applies everything after a configuration import.
 	AfterImport func(ctx context.Context) error
 	// Restart ends voipd so that it is restarted (after staging a restore).
-	Restart        func()
+	Restart func()
+	// Security is the SIP access control (ACL, bans); optional.
+	Security       *security.Guard
 	Log            *slog.Logger
 	UI             fs.FS // built web UI (index.html + assets); nil = none
 	DataDir        string
@@ -202,6 +205,13 @@ func New(d Deps) http.Handler {
 				r.Get("/backup/config", s.exportConfig)
 				r.Post("/backup/config/plan", s.planConfigImport)
 				r.Post("/backup/config/apply", s.applyConfigImport)
+			}
+
+			if d.Security != nil {
+				r.Get("/security", s.securityInfo)
+				r.Put("/security/settings", s.saveSecuritySettings)
+				r.Post("/security/bans", s.banIP)
+				r.Delete("/security/bans", s.unbanIP)
 			}
 
 			r.Get("/modules", s.listModules)

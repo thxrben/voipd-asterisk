@@ -132,3 +132,36 @@ func TestRenderTrunkWithoutCredentials(t *testing.T) {
 		t.Error("auth rendered for a trunk without credentials")
 	}
 }
+
+func TestRenderPhoneACLAndBans(t *testing.T) {
+	cfg := telekomConfig()
+	out, _ := Render(cfg)
+	if strings.Contains(string(out), "deny =") || strings.Contains(string(out), "type = acl") {
+		t.Fatal("ACL rendered while off")
+	}
+	cfg.Network.PhoneACL = []netip.Prefix{netip.MustParsePrefix("192.168.1.0/24"), netip.MustParsePrefix("fd00::/8")}
+	cfg.Network.Banned = []netip.Prefix{netip.MustParsePrefix("203.0.113.9/32"), netip.MustParsePrefix("2001:db8::1/128")}
+	out, err := Render(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	ep := s[strings.Index(s, "[kitchen]\ntype = endpoint"):]
+	if !strings.Contains(ep, "deny = 0.0.0.0/0,::/0\npermit = 192.168.1.0/24,fd00::/8") {
+		t.Errorf("phone endpoint ACL:\n%s", ep)
+	}
+	trunk := s[strings.Index(s, "[trunk-telekom-1]\ntype = endpoint"):]
+	trunk = trunk[:strings.Index(trunk, "\n\n")]
+	if strings.Contains(trunk, "deny") {
+		t.Error("trunk endpoint got the phone ACL")
+	}
+	if !strings.Contains(s, "[voipd-bans]\ntype = acl\ndeny = 203.0.113.9/32,2001:db8::1/128") {
+		t.Errorf("bans:\n%s", s)
+	}
+	// ACL on but no network allowed: phones are locked out entirely.
+	cfg.Network.PhoneACL = []netip.Prefix{}
+	out, _ = Render(cfg)
+	if !strings.Contains(string(out), "deny = 0.0.0.0/0,::/0\n") || strings.Contains(string(out), "permit =") {
+		t.Error("empty ACL")
+	}
+}

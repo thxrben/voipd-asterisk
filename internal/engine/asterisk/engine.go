@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -290,8 +291,36 @@ func (e *Engine) translateAMI(m Message) engine.Event {
 		}
 	case "RTCPReceived", "RTCPSent":
 		return rtcpEvent(b, m)
+	case "InvalidPassword", "ChallengeResponseFailed", "InvalidAccountID", "FailedACL":
+		return authFailure(b, m)
 	}
 	return nil
+}
+
+// authFailure translates an AMI security event of PJSIP.
+func authFailure(b engine.Meta, m Message) engine.Event {
+	// A request refused by an endpoint ACL is then also refused by the
+	// placeholder endpoint ("<unknown>"): one refusal, not a second login.
+	if !strings.EqualFold(m.Get("Service"), "pjsip") || m.Get("AccountID") == "<unknown>" {
+		return nil
+	}
+	// RemoteAddress: IPV4/UDP/192.0.2.10/5060
+	parts := strings.Split(m.Get("RemoteAddress"), "/")
+	if len(parts) < 3 {
+		return nil
+	}
+	ip, err := netip.ParseAddr(parts[2])
+	if err != nil {
+		return nil
+	}
+	kind := "password"
+	switch m.Get("Event") {
+	case "InvalidAccountID":
+		kind = "unknown_account"
+	case "FailedACL":
+		kind = "acl"
+	}
+	return engine.AuthFailure{Meta: b, IP: ip.Unmap(), Account: m.Get("AccountID"), Kind: kind}
 }
 
 func rtcpEvent(b engine.Meta, m Message) engine.Event {

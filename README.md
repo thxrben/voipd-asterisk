@@ -190,6 +190,23 @@ Under *System → Backup*:
 - **Call history** downloads as CSV or JSON from the call log, with the
   current filters.
 
+## SIP access
+
+Under *System → Security*:
+
+- **Phones only from allowed networks.** Phone endpoints get an ACL; a
+  REGISTER or call from anywhere else is refused before the password is
+  checked. By default the allowed networks are this host's own networks
+  (the LAN), `VOIPD_LOCAL_NETS` (e.g. WireGuard) and loopback; the page
+  shows the effective list and can replace it with your own. The carrier
+  line is not affected.
+- **Bans after failed logins.** voipd follows Asterisk's security events
+  (wrong password, unknown account). A sender with 10 failures within 10
+  minutes is banned for an hour (all adjustable); bans apply to every SIP
+  request from that address, survive restarts, can be lifted or added by
+  hand, and are reported by e-mail (admins), MQTT and webhooks
+  (`security.banned`).
+
 ## Integrations
 
 Configured under *Integrations* in the web UI; each one can be switched on
@@ -283,6 +300,8 @@ test/e2e/integrations.sh # Mosquitto, mailpit, webhook receiver: events, e-mail 
 test/e2e/voicemail.sh   # leave a message, message waiting light, *98 listen and delete (~1 min)
 test/e2e/backup.sh      # backups with rotation, config export/edit/import reaching Asterisk, encrypted
                         # export restoring a deleted phone, full restore through a restart (~1 min)
+test/e2e/security.sh    # phone ACL (refused outside allowed networks, line unaffected), ban after
+                        # wrong passwords, unban (~1 min)
 test/e2e/directory.sh   # voipd image with the compose security settings: LDAP on 389 as the phones
                         # search, unprivileged afterwards, CardDAV (~3 min with image build)
 ```

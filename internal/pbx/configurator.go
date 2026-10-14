@@ -68,6 +68,19 @@ func (c *Configurator) SetExternalV4(ctx context.Context, ip netip.Addr) (bool, 
 	return true, c.Apply(ctx)
 }
 
+// SetAccess sets the phone ACL and the banned networks for the next Apply.
+func (c *Configurator) SetAccess(acl, banned []netip.Prefix) {
+	c.mu.Lock()
+	c.net.PhoneACL, c.net.Banned = acl, banned
+	c.mu.Unlock()
+}
+
+// ApplyAccess sets the phone ACL and the banned networks and applies them.
+func (c *Configurator) ApplyAccess(ctx context.Context, acl, banned []netip.Prefix) error {
+	c.SetAccess(acl, banned)
+	return c.Apply(ctx)
+}
+
 // Hosts returns registrar hosts and their registrations, for DNS watching.
 func (c *Configurator) Hosts() trunks.Hosts {
 	c.mu.Lock()

@@ -687,3 +687,36 @@ test('users cannot open the system page', async ({ page }) => {
   await page.goto('/system')
   await expect(page).toHaveURL(/\/calls$/)
 })
+
+test('system: SIP access control and bans', async ({ page }) => {
+  await loginAs(page, admin)
+  await page.goto('/system?tab=security')
+  const form = page.getByRole('form', { name: 'SIP access settings' })
+  await expect(form.getByLabel('Limit phones to allowed networks')).toBeChecked()
+  await expect(form.getByText('127.0.0.0/8')).toBeVisible()
+
+  await form.getByRole('radio', { name: 'Only these networks' }).check()
+  await form.getByRole('textbox', { name: /^Networks/ }).fill('192.168.1.0/24\nnot-a-network')
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(form.getByText('"not-a-network" is not an address or network')).toBeVisible()
+  await form.getByRole('textbox', { name: /^Networks/ }).fill('10.99.0.0/16')
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('SIP access settings applied')).toBeVisible()
+  // Loopback is always allowed, so the browser (127.0.0.1) gets no warning.
+  await expect(form.getByText('is outside the allowed networks')).toHaveCount(0)
+  const api = await (await page.request.get('/api/v1/security')).json()
+  expect(api.acl).toContain('10.99.0.0/16')
+
+  const banForm = page.getByRole('form', { name: 'Ban an address' })
+  await banForm.getByLabel('Address or network').fill('203.0.113.9')
+  await banForm.getByLabel('Reason').fill('scanner')
+  await banForm.getByRole('button', { name: 'Ban' }).click()
+  await expect(page.getByRole('cell', { name: '203.0.113.9/32', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Unban 203.0.113.9/32' }).click()
+  await expect(page.getByText('Nobody is banned.')).toBeVisible()
+
+  // Back to automatic for the other tests.
+  await form.getByRole('radio', { name: /Automatic/ }).check()
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('SIP access settings applied').last()).toBeVisible()
+})

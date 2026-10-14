@@ -1,9 +1,13 @@
 <script lang="ts">
-  // System: backups and configuration transfer.
+  // System: backups and configuration transfer, SIP access control.
   import { router } from '../lib/router.svelte'
   import BackupTab from '../components/system/BackupTab.svelte'
+  import SecurityTab from '../components/system/SecurityTab.svelte'
 
-  const tabs = [{ id: 'backup', label: 'Backup' }] as const
+  const tabs = [
+    { id: 'backup', label: 'Backup' },
+    { id: 'security', label: 'Security' },
+  ] as const
   const tab = $derived(tabs.find((t) => t.id === router.query.get('tab')) ?? tabs[0])
 </script>
 
@@ -21,6 +25,8 @@
 
   {#if tab.id === 'backup'}
     <BackupTab />
+  {:else if tab.id === 'security'}
+    <SecurityTab />
   {/if}
 </div>
 

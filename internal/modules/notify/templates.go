@@ -109,6 +109,20 @@ Details: {{.Link}}
 		`<h2 style="margin:0 0 .5em">Sicherung fehlgeschlagen</h2>
 <p>Die Sicherung von voipd am {{.Time}} ist fehlgeschlagen.<br>Fehler: {{.Reason}}</p>`)
 
+	bannedTmpl = newTmpl(
+		`voipd: SIP-Absender gesperrt: {{.Reason}}`,
+		`voipd hat am {{.Time}} einen SIP-Absender gesperrt.
+
+Adresse: {{.Reason}}
+Grund:   {{.Detail}}{{if .Extensions}}
+Konto:   {{.Extensions}}{{end}}
+{{if .Link}}
+Entsperren: {{.Link}}
+{{end}}`,
+		`<h2 style="margin:0 0 .5em">SIP-Absender gesperrt</h2>
+<table cellpadding="3"><tr><td>Adresse</td><td><b>{{.Reason}}</b></td></tr><tr><td>Grund</td><td>{{.Detail}}</td></tr>
+{{if .Extensions}}<tr><td>Konto</td><td>{{.Extensions}}</td></tr>{{end}}<tr><td>Zeit</td><td>{{.Time}}</td></tr></table>`)
+
 	testTmpl = newTmpl(
 		`voipd: Test-E-Mail`,
 		`Diese Test-E-Mail zeigt, dass der Mailversand von voipd funktioniert ({{.Time}}).
@@ -120,7 +134,7 @@ Details: {{.Link}}
 type fields struct {
 	Caller, CallerNumber, Callee, Time, Extensions, Reason string
 	Trunk, Number, Downtime                                string
-	Link, Duration                                         string
+	Link, Duration, Detail                                 string
 	Attached                                               bool
 }
 

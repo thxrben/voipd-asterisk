@@ -6,10 +6,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -262,6 +265,15 @@ func (c Config) validate() error {
 	if _, err := c.Network.Parsed(); err != nil {
 		return err
 	}
+	for _, l := range []struct{ name, env, addr string }{
+		{"http.listen", "VOIPD_HTTP_LISTEN", c.HTTP.Listen},
+		{"ldap.listen", "VOIPD_LDAP_LISTEN", c.LDAP.Listen},
+		{"ldap.tls_listen", "VOIPD_LDAPS_LISTEN", c.LDAP.TLSListen},
+	} {
+		if err := checkListen(l.addr, l.name == "http.listen"); err != nil {
+			return fmt.Errorf("%s (%s): %w", l.name, l.env, err)
+		}
+	}
 	if c.HTTP.PublicURL != "" {
 		u, err := url.Parse(c.HTTP.PublicURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -285,6 +297,30 @@ func (c Config) validate() error {
 		"public_ip_every": t.PublicIPEvery, "dns_check_every": t.DNSCheckEvery} {
 		if d <= 0 {
 			return fmt.Errorf("trunks.%s must be positive", name)
+		}
+	}
+	return nil
+}
+
+// checkListen validates a listen address like [::]:8080, 0.0.0.0:389 or
+// :8080; "" is allowed unless required.
+func checkListen(addr string, required bool) error {
+	if addr == "" {
+		if required {
+			return errors.New("must not be empty")
+		}
+		return nil
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%q is not host:port, e.g. [::]:8080 or 0.0.0.0:8080", addr)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		return fmt.Errorf("%q: invalid port", addr)
+	}
+	if host != "" && strings.Contains(host, ":") {
+		if _, err := netip.ParseAddr(host); err != nil {
+			return fmt.Errorf("%q: %q is not an IPv6 address (all addresses: [::])", addr, host)
 		}
 	}
 	return nil

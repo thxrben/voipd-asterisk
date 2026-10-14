@@ -6,6 +6,7 @@
   import { session } from '../lib/session.svelte'
   import type { CallRow } from '../lib/types'
   import CallTable from '../components/CallTable.svelte'
+  import Download from '@lucide/svelte/icons/download'
 
   const statuses = [
     { id: 'answered', label: 'Answered' },
@@ -46,6 +47,14 @@
     if (before) p.set('before', String(before))
     p.set('limit', '50')
     return p.toString()
+  }
+
+  // The download uses the same filters as the list, without paging.
+  function exportURL(format: 'csv' | 'json'): string {
+    const p = new URLSearchParams(params())
+    p.delete('limit')
+    p.set('format', format)
+    return `/api/v1/calls/export?${p}`
   }
 
   async function load(more = false) {
@@ -93,6 +102,10 @@
 <div class="page">
   <div class="head">
     <h1>{session.isAdmin ? 'Call log' : 'My calls'}</h1>
+    <div class="exports">
+      <a class="button" href={exportURL('csv')} download><Download size={15} /> CSV</a>
+      <a class="button" href={exportURL('json')} download><Download size={15} /> JSON</a>
+    </div>
   </div>
 
   <section class="card">
@@ -159,6 +172,17 @@
 </div>
 
 <style>
+  .head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .exports {
+    display: flex;
+    gap: 0.5rem;
+  }
   .page {
     display: grid;
     gap: 1rem;

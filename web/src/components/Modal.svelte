@@ -13,6 +13,8 @@
   }
   let { title, open, onclose, children, footer, wide = false }: Props = $props()
   let dialog = $state<HTMLDialogElement>()
+  // Several dialogs can live on one page; each needs its own title id.
+  const titleId = $props.id()
 
   $effect(() => {
     if (!dialog) return
@@ -21,9 +23,9 @@
   })
 </script>
 
-<dialog bind:this={dialog} class:wide onclose={onclose} aria-labelledby="modal-title">
+<dialog bind:this={dialog} class:wide onclose={onclose} aria-labelledby={titleId}>
   <header>
-    <h2 id="modal-title">{title}</h2>
+    <h2 id={titleId}>{title}</h2>
     <button class="close" onclick={onclose} aria-label="Close"><X size={18} /></button>
   </header>
   <div class="content">{@render children()}</div>

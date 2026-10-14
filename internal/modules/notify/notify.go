@@ -36,7 +36,7 @@ type Config struct {
 	MissedCalls  bool     `json:"missed_calls"`  // to the owners of the extensions that rang
 	MissedTo     []string `json:"missed_to"`     // ... and these addresses
 	BlockedCalls bool     `json:"blocked_calls"` // to the admins
-	TrunkAlerts  bool     `json:"trunk_alerts"`  // line down / back up, to the admins
+	TrunkAlerts  bool     `json:"trunk_alerts"`  // line down / back up and failed backups, to the admins
 	AdminTo      []string `json:"admin_to"`      // extra admin addresses
 
 	Voicemail       bool `json:"voicemail"`        // new messages to the mailbox owner (+ missed_to)
@@ -224,6 +224,16 @@ func (m *Module) compose(ctx context.Context, h *modules.Host, c Config, ev even
 			return nil, Message{}, false
 		}
 		return admins(), render(h, trunkDownTmpl, ev), true
+	case "backup.failed":
+		if !c.TrunkAlerts {
+			return nil, Message{}, false
+		}
+		return admins(), render(h, backupFailedTmpl, ev, func(f *fields) {
+			f.Reason, _ = ev.Data["error"].(string)
+			if h.PublicURL != "" {
+				f.Link = strings.TrimRight(h.PublicURL, "/") + "/system"
+			}
+		}), true
 	case "trunk.up":
 		// Only recovery from an announced outage, not every first registration.
 		if _, recovered := ev.Data["down_seconds"]; !c.TrunkAlerts || !recovered {

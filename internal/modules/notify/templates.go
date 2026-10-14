@@ -99,6 +99,16 @@ Ausfallzeit: {{.Downtime}}
 		`<h2 style="margin:0 0 .5em">Leitung wieder verbunden</h2>
 <p>Die Leitung <b>{{.Trunk}}</b> ({{.Number}}) ist seit {{.Time}} wieder registriert.<br>Ausfallzeit: {{.Downtime}}</p>`)
 
+	backupFailedTmpl = newTmpl(
+		`voipd: Sicherung fehlgeschlagen`,
+		`Die Sicherung von voipd am {{.Time}} ist fehlgeschlagen.
+Fehler: {{.Reason}}
+{{if .Link}}
+Details: {{.Link}}
+{{end}}`,
+		`<h2 style="margin:0 0 .5em">Sicherung fehlgeschlagen</h2>
+<p>Die Sicherung von voipd am {{.Time}} ist fehlgeschlagen.<br>Fehler: {{.Reason}}</p>`)
+
 	testTmpl = newTmpl(
 		`voipd: Test-E-Mail`,
 		`Diese Test-E-Mail zeigt, dass der Mailversand von voipd funktioniert ({{.Time}}).

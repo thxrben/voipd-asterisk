@@ -14,6 +14,7 @@
   import Moon from '@lucide/svelte/icons/moon'
   import Menu from '@lucide/svelte/icons/menu'
   import Phone from '@lucide/svelte/icons/phone'
+  import Wrench from '@lucide/svelte/icons/wrench'
   import type { Component } from 'svelte'
   import { session } from './lib/session.svelte'
   import { live } from './lib/live.svelte'
@@ -30,6 +31,7 @@
   import Voicemail from './routes/Voicemail.svelte'
   import Codes from './routes/Codes.svelte'
   import Directory from './routes/Directory.svelte'
+  import System from './routes/System.svelte'
   import Toasts from './components/Toasts.svelte'
 
   let loadError = $state('')
@@ -55,6 +57,7 @@
     { href: '/telephony', label: 'Telephony', icon: Settings, admin: true },
     { href: '/integrations', label: 'Integrations', icon: Plug, admin: true },
     { href: '/directory', label: 'Directory', icon: BookOpen, admin: true },
+    { href: '/system', label: 'System', icon: Wrench, admin: true },
     { href: '/status', label: 'Status', icon: Server, admin: true },
     { href: '/codes', label: 'Phone codes', icon: Hash },
   ]
@@ -66,7 +69,7 @@
 
   // Users without admin rights start on their own call list.
   $effect(() => {
-    const adminPaths = ['/', '/status', '/telephony', '/blocking', '/contacts', '/integrations', '/directory']
+    const adminPaths = ['/', '/status', '/telephony', '/blocking', '/contacts', '/integrations', '/directory', '/system']
     if (session.state === 'ready' && !session.isAdmin && adminPaths.includes(router.path)) {
       router.go('/calls', true)
     }
@@ -155,6 +158,8 @@
           <Integrations />
         {:else if router.path === '/directory' && session.isAdmin}
           <Directory />
+        {:else if router.path === '/system' && session.isAdmin}
+          <System />
         {:else if router.path === '/' && session.isAdmin}
           <Dashboard />
         {:else}

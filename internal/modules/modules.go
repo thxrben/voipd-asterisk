@@ -258,6 +258,15 @@ func (m *Manager) Merge(ctx context.Context, name string, raw json.RawMessage) (
 	return json.Marshal(cfg)
 }
 
+// RestartAll reloads every module from its stored settings.
+func (m *Manager) RestartAll() error {
+	var errs []error
+	for _, name := range m.names {
+		errs = append(errs, m.restart(name))
+	}
+	return errors.Join(errs...)
+}
+
 // Restart reloads a module from its stored settings (after Run started).
 func (m *Manager) Restart(name string) error {
 	if _, ok := m.slots[name]; !ok {

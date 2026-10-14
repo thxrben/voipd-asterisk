@@ -122,7 +122,7 @@
     <Field label="Missed calls and voicemail also to" error={save.fields['missed_to']} help="One address per line">
       <textarea rows="2" bind:value={missedTo}></textarea>
     </Field>
-    <Field label="Line outages and recovery to the admins" inline>
+    <Field label="Line outages and failed backups to the admins" inline>
       <input type="checkbox" bind:checked={cfg.trunk_alerts} />
     </Field>
     <Field label="Blocked calls to the admins" inline>

@@ -27,7 +27,8 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | Integrations: MQTT with Home Assistant discovery, signed webhooks, e-mail notifications | done |
 | Voicemail: German prompts, message waiting light, *98 phone menu, web player, personal greetings | done |
 | Phone directory: LDAP (Yealink, Snom, Grandstream, Gigaset) and CardDAV (softphones, FritzBox) | done |
-| Backups, hardening | in progress |
+| Backups: encrypted full backups (scheduled, rotated), restore, configuration as YAML with import preview, call history CSV/JSON | done |
+| Hardening | in progress |
 
 ## Run
 
@@ -62,6 +63,7 @@ database.
 | `VOIPD_DNS_SERVER` | `host:port` resolver for voipd's registrar DNS checks |
 | `VOIPD_DB_PATH`, `VOIPD_LOG_LEVEL` | database path, `debug`/`info`/`warn` |
 | `VOIPD_VOICEMAIL_DIR` | voicemail directory, shared with Asterisk's recording directory (default `/var/lib/voipd/voicemail`) |
+| `VOIPD_BACKUP_DIR` | scheduled backups (default `/var/lib/voipd/backups`, inside the data volume; mount another disk there) |
 | `VOIPD_LDAP_LISTEN` | LDAP phone book (default `[::]:389`, empty disables it) |
 | `VOIPD_RUN_AS` | `uid:gid` voipd switches to when started as root (default `65532:65532`) |
 | `VOIPD_HTTP_LISTEN`, `VOIPD_PUBLIC_URL` | web UI listen address (default `[::]:8080`) and the URL users open |
@@ -159,6 +161,35 @@ each kind of phone.
 The directory is read-only. LDAP is unencrypted: keep it to the LAN and
 WireGuard.
 
+## Backups
+
+Under *System → Backup*:
+
+- **Full backups** hold the database (configuration, call history,
+  contacts, lists) and all voicemail, encrypted with a passphrase
+  ([age](https://age-encryption.org), scrypt). voipd makes one daily at
+  the configured time and keeps the newest N in `VOIPD_BACKUP_DIR`; a
+  failed backup is reported by e-mail (admins), MQTT and webhooks
+  (`backup.failed`). The default directory is on the same disk as the data:
+  mount a USB stick or NAS share there (owned by uid 65532), or download
+  backups from the page.
+- **Restore** a stored or uploaded backup from the page: voipd checks the
+  passphrase and the archive, then restarts and swaps the data in at start.
+  The replaced data stays in `pre-restore/` (database) and
+  `voicemail/.pre-restore/` until the next restore. Without the web UI:
+  `docker compose exec voipd voipd restore /var/lib/voipd/backups/<file>`
+  (asks for the passphrase or reads `VOIPD_BACKUP_PASSPHRASE`), then
+  `docker compose restart voipd`.
+- **Configuration** export as readable YAML (lines, phones, ring groups,
+  routes, manual lists and contacts, synced list sources, integrations,
+  directory accounts, settings), without passwords, or with them as an
+  encrypted file. Importing shows a preview of every addition, change and
+  removal first; sections present in the file replace the current ones,
+  absent sections and passwords missing from the file are kept, and
+  settings are merged.
+- **Call history** downloads as CSV or JSON from the call log, with the
+  current filters.
+
 ## Integrations
 
 Configured under *Integrations* in the web UI; each one can be switched on
@@ -250,6 +281,8 @@ test/e2e/ui.sh          # web UI in Chrome (Playwright) with demo data and a fak
 test/e2e/integrations.sh # Mosquitto, mailpit, webhook receiver: events, e-mail and MQTT commands
                         # with real calls (~1.5 min)
 test/e2e/voicemail.sh   # leave a message, message waiting light, *98 listen and delete (~1 min)
+test/e2e/backup.sh      # backups with rotation, config export/edit/import reaching Asterisk, encrypted
+                        # export restoring a deleted phone, full restore through a restart (~1 min)
 test/e2e/directory.sh   # voipd image with the compose security settings: LDAP on 389 as the phones
                         # search, unprivileged afterwards, CardDAV (~3 min with image build)
 ```

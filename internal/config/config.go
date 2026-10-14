@@ -91,6 +91,9 @@ type Store struct {
 	// (a volume shared with the Asterisk container): voicemail messages
 	// and greetings.
 	VoicemailDir string `yaml:"voicemail_dir"`
+	// BackupDir receives the scheduled backups. Mount a disk other than
+	// the data volume's here to survive a broken SD card.
+	BackupDir string `yaml:"backup_dir"`
 }
 
 type HTTP struct {
@@ -139,7 +142,8 @@ func Default() Config {
 			ReconnectMin: time.Second,
 			ReconnectMax: 30 * time.Second,
 		},
-		Store: Store{Path: "/var/lib/voipd/voipd.db", VoicemailDir: "/var/lib/voipd/voicemail"},
+		Store: Store{Path: "/var/lib/voipd/voipd.db", VoicemailDir: "/var/lib/voipd/voicemail",
+			BackupDir: "/var/lib/voipd/backups"},
 		Auth: Auth{
 			GroupsClaim: "groups",
 			AdminGroup:  "voipd-admins",
@@ -197,6 +201,7 @@ func applyEnv(c *Config) {
 		"VOIPD_GENERATED_DIR": &c.Asterisk.GeneratedDir,
 		"VOIPD_DB_PATH":       &c.Store.Path,
 		"VOIPD_VOICEMAIL_DIR": &c.Store.VoicemailDir,
+		"VOIPD_BACKUP_DIR":    &c.Store.BackupDir,
 		"VOIPD_HTTP_LISTEN":   &c.HTTP.Listen,
 		"VOIPD_LDAP_LISTEN":   &c.LDAP.Listen,
 		"VOIPD_RUN_AS":        &c.RunAs,

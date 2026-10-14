@@ -44,10 +44,15 @@ services:
       VOIPD_GENERATED_DIR: /etc/asterisk/voipd
       VOIPD_DB_PATH: /var/lib/voipd/voipd.db
       VOIPD_VOICEMAIL_DIR: /var/lib/voipd/voicemail
+      VOIPD_BACKUP_DIR: /var/lib/voipd/backups
     volumes:
       - asterisk-generated:/etc/asterisk/voipd
       - voipd-data:/var/lib/voipd
       - voicemail:/var/lib/voipd/voicemail
+      # Scheduled backups land in the data volume unless another disk is
+      # mounted here, e.g. a USB stick or NAS share (the directory must be
+      # writable by uid 65532: sudo chown 65532:65532 /mnt/usb/voipd-backups):
+      #- /mnt/usb/voipd-backups:/var/lib/voipd/backups
 
 volumes:
   asterisk-generated:

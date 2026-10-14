@@ -616,3 +616,74 @@ test('users cannot open integrations', async ({ page }) => {
   await page.goto('/integrations')
   await expect(page).toHaveURL(/\/calls$/)
 })
+
+test('system: backups, configuration export and import with preview', async ({ page }) => {
+  await loginAs(page, admin)
+  await page.getByRole('link', { name: 'System' }).click()
+  await expect(page.getByRole('heading', { name: 'Scheduled backups' })).toBeVisible()
+  await expect(page.getByText('same disk as the data')).toBeVisible()
+
+  // Enabling needs a passphrase.
+  const form = page.getByRole('form', { name: 'Backup settings' })
+  await form.getByLabel('Back up daily').check()
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(form.getByText('set a passphrase first')).toBeVisible()
+  await form.getByLabel('Passphrase').fill('family backup phrase')
+  await form.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('Backups run daily at 03:30')).toBeVisible()
+  await expect(form.getByText('Set. Leave empty to keep it.')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Back up now' }).click()
+  await expect(page.getByText(/Backup voipd-backup-\d{8}-\d{6}\.tar\.gz\.age written/)).toBeVisible()
+  const download = page.getByRole('link', { name: /^Download voipd-backup-/ })
+  await expect(download).toHaveCount(1)
+
+  // A wrong passphrase is refused before anything is restored.
+  await page.getByRole('button', { name: /^Restore voipd-backup-/ }).click()
+  const dialog = page.getByRole('dialog', { name: 'Restore a backup' })
+  await dialog.getByLabel('Passphrase of the backup').fill('not the passphrase')
+  await dialog.getByRole('button', { name: 'Restore and restart' }).click()
+  await expect(dialog.getByText('wrong passphrase')).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+
+  // Export, edit, preview and apply.
+  const res = await page.request.get('/api/v1/backup/config')
+  expect(res.headers()['content-disposition']).toContain('attachment')
+  const yaml = await res.text()
+  expect(yaml).not.toContain('secrets:')
+  const edited = yaml.replace('name: Kitchen', 'name: Küche')
+  expect(edited).not.toBe(yaml)
+  const importForm = page.getByRole('form', { name: 'Import configuration' })
+  await importForm.getByLabel('Configuration file').setInputFiles({
+    name: 'voipd-config.yaml', mimeType: 'application/yaml', buffer: Buffer.from(edited),
+  })
+  await importForm.getByRole('button', { name: 'Preview changes' }).click()
+  const preview = page.getByRole('dialog', { name: 'Import configuration' })
+  await expect(preview.getByText('Phones')).toBeVisible()
+  await expect(preview.getByText(/1 changed: 10 \(name\)/)).toBeVisible()
+  await preview.getByRole('button', { name: 'Apply changes' }).click()
+  await expect(page.getByText('Configuration imported')).toBeVisible()
+  const tel = await (await page.request.get('/api/v1/telephony')).json()
+  expect(tel.extensions.find((e: { number: string }) => e.number === '10').name).toBe('Küche')
+
+  // Put the original back for the other tests (API, same endpoints).
+  const csrf = (await (await page.request.get('/api/v1/me')).json()).csrf_token
+  const file = { name: 'c.yaml', mimeType: 'application/yaml', buffer: Buffer.from(yaml) }
+  const plan = await (await page.request.post('/api/v1/backup/config/plan', { headers: { 'X-CSRF-Token': csrf }, multipart: { file } })).json()
+  const back = await page.request.post('/api/v1/backup/config/apply', {
+    headers: { 'X-CSRF-Token': csrf }, multipart: { token: plan.result.token, file },
+  })
+  expect(back.status()).toBe(200)
+
+  // Call history downloads.
+  await page.getByRole('link', { name: 'Calls', exact: true }).click()
+  const csv = await page.request.get(await page.getByRole('link', { name: 'CSV' }).getAttribute('href') ?? '')
+  expect(await csv.text()).toContain('started_at,direction,status')
+})
+
+test('users cannot open the system page', async ({ page }) => {
+  await loginAs(page, alice)
+  await expect(page.getByRole('link', { name: 'System' })).toHaveCount(0)
+  await page.goto('/system')
+  await expect(page).toHaveURL(/\/calls$/)
+})

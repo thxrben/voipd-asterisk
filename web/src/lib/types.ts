@@ -489,3 +489,45 @@ export interface DirectoryEntry {
   org: string
   numbers: { e164: string; dial: string; type: string }[]
 }
+
+export interface BackupSettings {
+  enabled: boolean
+  time: string
+  keep: number
+  passphrase_set: boolean
+}
+
+export interface BackupFile {
+  name: string
+  size: number
+  modified: string
+}
+
+export interface BackupInfo {
+  settings: BackupSettings
+  status: {
+    dir: string
+    last_at?: string
+    last_file?: string
+    last_error?: string
+    next_at?: string
+    running: boolean
+  }
+  files: BackupFile[]
+  same_disk: boolean
+  restore_pending: boolean
+}
+
+export interface ConfigDiff {
+  sections: { section: string; added: string[]; changed: { key: string; fields: string[] }[]; removed: string[] }[]
+  warnings: string[]
+  secrets: boolean
+  token: string
+}
+
+export interface BackupManifest {
+  created_at: string
+  calls: number
+  voicemails: number
+  files: number
+}

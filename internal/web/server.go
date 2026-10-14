@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"voipd/internal/auth"
+	"voipd/internal/backup"
 	"voipd/internal/callflow"
 	"voipd/internal/directory"
 	"voipd/internal/engine"
@@ -71,11 +72,17 @@ type Deps struct {
 	DirectoryAccounts *directory.Accounts
 	LDAP              *directory.LDAP
 	CardDAV           *directory.CardDAV
-	Log               *slog.Logger
-	UI                fs.FS // built web UI (index.html + assets); nil = none
-	DataDir           string
-	TrustedProxies    []netip.Prefix
-	Now               func() time.Time
+	// Backup makes and lists full backups; optional.
+	Backup *backup.Service
+	// AfterImport re-applies everything after a configuration import.
+	AfterImport func(ctx context.Context) error
+	// Restart ends voipd so that it is restarted (after staging a restore).
+	Restart        func()
+	Log            *slog.Logger
+	UI             fs.FS // built web UI (index.html + assets); nil = none
+	DataDir        string
+	TrustedProxies []netip.Prefix
+	Now            func() time.Time
 	// StatusEvery is the interval of status snapshots on the event stream.
 	StatusEvery time.Duration
 }
@@ -124,6 +131,7 @@ func New(d Deps) http.Handler {
 		r.Use(s.authenticated)
 		r.Get("/me", s.me)
 		r.Get("/calls", s.listCalls)
+		r.Get("/calls/export", s.exportCalls)
 		r.Get("/calls/{id}", s.getCall)
 		r.Get("/events", s.events)
 		r.Put("/extensions/{id}/dnd", s.setDND) // admins and the owner
@@ -182,6 +190,19 @@ func New(d Deps) http.Handler {
 			r.Post("/directory/accounts", s.createDirectoryAccount)
 			r.Delete("/directory/accounts/{id}", s.deleteDirectoryAccount)
 			r.Post("/directory/accounts/{id}/password", s.regenerateDirectoryPassword)
+
+			if d.Backup != nil {
+				r.Get("/backup", s.backupInfo)
+				r.Put("/backup/settings", s.saveBackupSettings)
+				r.Post("/backup/run", s.runBackup)
+				r.Post("/backup/restore", s.restoreBackup)
+				r.Get("/backup/files/{name}", s.downloadBackup)
+				r.Delete("/backup/files/{name}", s.deleteBackup)
+				r.Post("/backup/files/{name}/restore", s.restoreBackup)
+				r.Get("/backup/config", s.exportConfig)
+				r.Post("/backup/config/plan", s.planConfigImport)
+				r.Post("/backup/config/apply", s.applyConfigImport)
+			}
 
 			r.Get("/modules", s.listModules)
 			r.Put("/modules/{name}", s.saveModule)

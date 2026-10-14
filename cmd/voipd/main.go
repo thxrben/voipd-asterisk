@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"voipd/internal/auth"
+	"voipd/internal/backup"
 	"voipd/internal/callflow"
 	"voipd/internal/config"
 	"voipd/internal/directory"
@@ -51,6 +52,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "restore" {
+		if err := restore(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "voipd:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "voipd:", err)
 		os.Exit(1)
@@ -72,7 +80,11 @@ func run() error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	// stop also ends voipd for a restart after a restore was staged; the
+	// container's restart policy starts it again.
+	ctx, stop := context.WithCancel(sigCtx)
 	defer stop()
 
 	// Privileged ports first, then give up root (the container starts
@@ -86,6 +98,11 @@ func run() error {
 		return err
 	}
 
+	if ok, err := backup.ApplyPending(cfg.Store.Path, cfg.Store.VoicemailDir); err != nil {
+		return fmt.Errorf("restore backup: %w", err)
+	} else if ok {
+		log.Warn("backup restored; the replaced data is kept in pre-restore directories", "db", cfg.Store.Path)
+	}
 	st, err := store.Open(ctx, cfg.Store.Path)
 	if err != nil {
 		return err
@@ -164,6 +181,24 @@ func run() error {
 		ldapSrv.SetError(cfg.LDAP.Listen, ldapErr)
 	}
 
+	backups := backup.NewService(st, bus, cfg.Store.BackupDir, filepath.Dir(cfg.Store.Path), cfg.Store.VoicemailDir,
+		log.With("component", "backup"))
+	afterImport := func(ctx context.Context) error {
+		var errs []error
+		errs = append(errs, conf.Apply(ctx), screen.Load(ctx))
+		if srcs, err := st.ListSources(ctx); err == nil {
+			for _, src := range srcs {
+				if src.Kind != "manual" && src.Kind != "file" {
+					syncer.Kick(src.ID)
+				}
+			}
+		}
+		errs = append(errs, mods.RestartAll(), vm.PublishAll(ctx))
+		dirAccounts.ForgetAll()
+		phonebook.Invalidate()
+		return errors.Join(errs...)
+	}
+
 	var proxies []netip.Prefix
 	for _, p := range cfg.HTTP.TrustedProxies {
 		proxies = append(proxies, netip.MustParsePrefix(p)) // validated by config.Load
@@ -173,7 +208,8 @@ func run() error {
 		Handler: web.New(web.Deps{
 			Store: st, Numbers: nums, Config: conf, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
 			Stats: statistics, Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
-			Directory: phonebook, DirectoryAccounts: dirAccounts, LDAP: ldapSrv, CardDAV: carddavSrv, Log: log.With("component", "web"), UI: webui.FS(),
+			Directory: phonebook, DirectoryAccounts: dirAccounts, LDAP: ldapSrv, CardDAV: carddavSrv,
+			Backup: backups, AfterImport: afterImport, Restart: stop, Log: log.With("component", "web"), UI: webui.FS(),
 			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -193,7 +229,7 @@ func run() error {
 		}
 		httpDone <- nil
 	}()
-	wg.Add(7)
+	wg.Add(8)
 	if ldapLn != nil {
 		wg.Add(1)
 		go func() {
@@ -209,6 +245,7 @@ func run() error {
 	go func() { defer wg.Done(); screen.Run(ctx) }()
 	go func() { defer wg.Done(); syncer.Run(ctx) }()
 	go func() { defer wg.Done(); cleanupLoop(ctx, authSvc) }()
+	go func() { defer wg.Done(); backups.Run(ctx) }()
 	go func() { defer wg.Done(); superviseLoop(ctx, sup, cfg.Trunks, log) }()
 	go func() { defer wg.Done(); watchNetwork(ctx, cfg, conf, sup, log) }()
 	go func() { defer wg.Done(); watchDNS(ctx, cfg, conf, sup, log) }()
@@ -262,6 +299,48 @@ func hashPassword() error {
 	}
 	fmt.Fprintln(os.Stderr)
 	fmt.Println(h)
+	return nil
+}
+
+// restore implements "voipd restore <file>": it stages a full backup that
+// voipd swaps in at its next start. The passphrase comes from
+// VOIPD_BACKUP_PASSPHRASE or stdin.
+func restore(args []string) error {
+	fl := flag.NewFlagSet("restore", flag.ExitOnError)
+	cfgPath := fl.String("config", os.Getenv("VOIPD_CONFIG"), "path to YAML config file")
+	fl.Parse(args)
+	if fl.NArg() != 1 {
+		return errors.New("usage: voipd restore [-config file] <backup file>")
+	}
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+	// Files must belong to the user voipd runs as.
+	if err := dropPrivileges(cfg.RunAs, slog.New(slog.DiscardHandler)); err != nil {
+		return err
+	}
+	pass := os.Getenv("VOIPD_BACKUP_PASSPHRASE")
+	if pass == "" {
+		fmt.Fprint(os.Stderr, "Backup passphrase: ")
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && line == "" {
+			return err
+		}
+		pass = strings.TrimRight(line, "\r\n")
+		fmt.Fprintln(os.Stderr)
+	}
+	f, err := os.Open(fl.Arg(0))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	m, err := backup.Stage(context.Background(), f, pass, filepath.Dir(cfg.Store.Path), cfg.Store.VoicemailDir, store.LatestSchema())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Backup from %s staged (%d calls, %d voicemails).\nRestart voipd to restore it, e.g. docker compose restart voipd.\n",
+		m.CreatedAt.Local().Format("2006-01-02 15:04"), m.Calls, m.Voicemails)
 	return nil
 }
 

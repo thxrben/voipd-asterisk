@@ -147,3 +147,10 @@ func (a *Accounts) forget(id int64) {
 		}
 	}
 }
+
+// ForgetAll drops all cached logins (after the accounts were replaced).
+func (a *Accounts) ForgetAll() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	clear(a.verified)
+}

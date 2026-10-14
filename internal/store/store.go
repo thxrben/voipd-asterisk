@@ -95,3 +95,16 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()`, key, value)
 	return err
 }
+
+// LatestSchema is the newest schema version this build migrates to.
+func LatestSchema() int64 {
+	entries, _ := migrations.ReadDir("migrations")
+	var latest int64
+	for _, e := range entries {
+		var v int64
+		if _, err := fmt.Sscanf(e.Name(), "%d_", &v); err == nil && v > latest {
+			latest = v
+		}
+	}
+	return latest
+}

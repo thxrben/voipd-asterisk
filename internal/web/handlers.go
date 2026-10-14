@@ -154,35 +154,9 @@ func parseTime(v string) (time.Time, error) {
 }
 
 func (s *Server) listCalls(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	f := store.CallFilter{
-		Directions: splitList(q.Get("direction")),
-		Statuses:   splitList(q.Get("status")),
-		Query:      q.Get("q"),
-		Extension:  q.Get("ext"),
-	}
-	var err error
-	for name, dst := range map[string]*time.Time{"from": &f.From, "to": &f.To, "before": &f.Before} {
-		if *dst, err = parseTime(q.Get(name)); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid "+name)
-			return
-		}
-	}
-	if v := q.Get("trunk"); v != "" {
-		if f.TrunkID, err = strconv.ParseInt(v, 10, 64); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid trunk")
-			return
-		}
-	}
-	if v := q.Get("limit"); v != "" {
-		f.Limit, _ = strconv.Atoi(v)
-	}
-	if id := identity(r); !id.IsAdmin() {
-		f.Restrict = true
-		if f.OnlyExtensions, err = s.d.Store.ExtensionsOwnedBy(r.Context(), id.Subject); err != nil {
-			s.internalError(w, r, err)
-			return
-		}
+	f, ok := s.callFilter(w, r)
+	if !ok {
+		return
 	}
 	calls, err := s.d.Store.ListCalls(r.Context(), f)
 	if err != nil {
@@ -197,6 +171,42 @@ func (s *Server) listCalls(w http.ResponseWriter, r *http.Request) {
 		resp["next_before"] = calls[len(calls)-1].StartedAt.UnixMilli()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// callFilter reads the call list filters; non-admins only see the calls
+// of their own extensions.
+func (s *Server) callFilter(w http.ResponseWriter, r *http.Request) (store.CallFilter, bool) {
+	q := r.URL.Query()
+	f := store.CallFilter{
+		Directions: splitList(q.Get("direction")),
+		Statuses:   splitList(q.Get("status")),
+		Query:      q.Get("q"),
+		Extension:  q.Get("ext"),
+	}
+	var err error
+	for name, dst := range map[string]*time.Time{"from": &f.From, "to": &f.To, "before": &f.Before} {
+		if *dst, err = parseTime(q.Get(name)); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid "+name)
+			return f, false
+		}
+	}
+	if v := q.Get("trunk"); v != "" {
+		if f.TrunkID, err = strconv.ParseInt(v, 10, 64); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid trunk")
+			return f, false
+		}
+	}
+	if v := q.Get("limit"); v != "" {
+		f.Limit, _ = strconv.Atoi(v)
+	}
+	if id := identity(r); !id.IsAdmin() {
+		f.Restrict = true
+		if f.OnlyExtensions, err = s.d.Store.ExtensionsOwnedBy(r.Context(), id.Subject); err != nil {
+			s.internalError(w, r, err)
+			return f, false
+		}
+	}
+	return f, true
 }
 
 func effectiveLimit(l int) int {

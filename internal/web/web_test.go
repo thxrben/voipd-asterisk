@@ -17,6 +17,7 @@ import (
 
 	"voipd/internal/auth"
 	"voipd/internal/auth/oidctest"
+	"voipd/internal/backup"
 	"voipd/internal/callflow"
 	"voipd/internal/config"
 	"voipd/internal/directory"
@@ -71,6 +72,10 @@ type env struct {
 	calls   *fakeCalls
 	screen  *screening.Engine
 	vmDir   string
+	backups *backup.Service
+	// imports counts AfterImport calls, restarts Restart calls.
+	imports  int
+	restarts chan struct{}
 }
 
 // newEnv starts voipd's web server and a fake OIDC provider. Seeded:
@@ -150,12 +155,17 @@ func newEnv(t *testing.T, mutate func(*config.Auth)) *env {
 	mods := modules.NewManager(&modules.Host{Bus: bus, Store: st, Screening: screen, Numbers: z, Trunks: fakeTrunks{},
 		Stats: stats.New(st.DB), Log: log}, mqtt.New(), webhook.New(), notify.New())
 	go func() { defer close(modsDone); mods.Run(syncCtx) }()
-	h = New(Deps{Store: st, Numbers: z, Config: applied, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
+	dataDir := t.TempDir()
+	backups := backup.NewService(st, bus, dataDir+"/backups", dataDir, vmDir, log)
+	ev := &env{t: t, srv: srv, idp: idp, st: st, bus: bus, calls: calls, applied: applied, screen: screen, vmDir: vmDir,
+		backups: backups, restarts: make(chan struct{}, 1)}
+	h = New(Deps{Backup: backups, AfterImport: func(context.Context) error { ev.imports++; return nil },
+		Restart: func() { ev.restarts <- struct{}{} }, Store: st, Numbers: z, Config: applied, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
 		Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
 		Directory: phonebook, DirectoryAccounts: dirAcc, CardDAV: directory.NewCardDAV(phonebook, dirAcc, log),
-		LDAP: directory.NewLDAP(phonebook, dirAcc, z, log), Log: log, DataDir: t.TempDir(), StatusEvery: 50 * time.Millisecond,
+		LDAP: directory.NewLDAP(phonebook, dirAcc, z, log), Log: log, DataDir: dataDir, StatusEvery: 50 * time.Millisecond,
 		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
-	return &env{t: t, srv: srv, idp: idp, st: st, bus: bus, calls: calls, applied: applied, screen: screen, vmDir: vmDir}
+	return ev
 }
 
 type client struct {

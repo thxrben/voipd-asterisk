@@ -155,6 +155,8 @@ export interface TrunkStatus {
   since: string
   attempts: number
   announced_down: boolean
+  family?: 'v4' | 'v6'
+
 }
 
 export interface PhoneContact {
@@ -573,4 +575,26 @@ export interface SecurityInfo {
     ips: string[]
     extra_names: string[]
   }
+}
+
+export interface RetentionSettings {
+  max_call_minutes: number
+  calls_days: number
+  audit_days: number
+  sip_events_days: number
+  webhook_days: number
+  voicemail_heard_days: number
+}
+
+export interface RetentionInfo {
+  settings: RetentionSettings
+  last_run: {
+    at: string
+    calls: number
+    audit: number
+    sip_events: number
+    webhook_deliveries: number
+    voicemails: number
+    error?: string
+  } | null
 }

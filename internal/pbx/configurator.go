@@ -21,10 +21,12 @@ type Configurator struct {
 	mu    sync.Mutex
 	net   engine.Network
 	hosts trunks.Hosts
+	// family overrides the address family of "auto" trunks (by name).
+	family map[string]string
 }
 
 func NewConfigurator(st *store.Store, eng engine.Engine, sup *trunks.Supervisor, base engine.Network) *Configurator {
-	return &Configurator{st: st, eng: eng, sup: sup, net: base, hosts: trunks.Hosts{}}
+	return &Configurator{st: st, eng: eng, sup: sup, net: base, hosts: trunks.Hosts{}, family: map[string]string{}}
 }
 
 // Apply rebuilds and applies the configuration. Safe for concurrent use.
@@ -34,6 +36,15 @@ func (c *Configurator) Apply(ctx context.Context) error {
 	cfg, err := BuildEngineConfig(ctx, c.st, c.net)
 	if err != nil {
 		return err
+	}
+	auto := map[string]bool{}
+	for i, t := range cfg.Trunks {
+		if t.AddressFamily == "auto" || t.AddressFamily == "" {
+			auto[t.Name] = true
+			if f := c.family[t.Name]; f != "" {
+				cfg.Trunks[i].AddressFamily = f
+			}
+		}
 	}
 	if err := c.eng.ApplyConfig(ctx, cfg); err != nil {
 		return err
@@ -46,7 +57,7 @@ func (c *Configurator) Apply(ctx context.Context) error {
 				continue
 			}
 			reg := engine.LineEndpoint(t.Name, l.ID)
-			lines = append(lines, trunks.Line{Registration: reg, Trunk: t.Name, Number: l.Number})
+			lines = append(lines, trunks.Line{Registration: reg, Trunk: t.Name, Number: l.Number, AutoFamily: auto[t.Name]})
 			hosts[t.Registrar] = append(hosts[t.Registrar], reg)
 		}
 	}
@@ -87,6 +98,15 @@ func (c *Configurator) SetTLS(cert, key string) {
 	c.mu.Lock()
 	c.net.TLSCertFile, c.net.TLSKeyFile = cert, key
 	c.mu.Unlock()
+}
+
+// SetFamily moves an "auto" trunk to an address family (v4 | v6) and
+// applies the configuration.
+func (c *Configurator) SetFamily(ctx context.Context, trunk, family string) error {
+	c.mu.Lock()
+	c.family[trunk] = family
+	c.mu.Unlock()
+	return c.Apply(ctx)
 }
 
 // Hosts returns registrar hosts and their registrations, for DNS watching.

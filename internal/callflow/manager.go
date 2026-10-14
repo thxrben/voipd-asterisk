@@ -43,6 +43,10 @@ type Deps struct {
 	// fallback hang up instead, and *98 is unavailable.
 	Voicemail *voicemail.Service
 
+	// MaxDuration ends answered calls after this long (0 = no limit); nil
+	// = no limit. Read when a call is answered.
+	MaxDuration func() time.Duration
+
 	// Optional overrides for tests.
 	Now          func() time.Time
 	QualityEvery time.Duration // RTCP polling interval for answered legs

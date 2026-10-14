@@ -2,7 +2,8 @@
 # End-to-end SIP security: a phone registers over TLS, verifying voipd's
 # own certificate, and calls with SRTP; phones only from allowed networks
 # (the carrier line is not affected); a sender with a wrong password is
-# banned after repeated failures until unbanned.
+# banned after repeated failures until unbanned; an answered call ends at
+# the maximum call duration.
 #
 #   test/e2e/security.sh        (~2 min)
 source "$(dirname "$0")/lib.sh"
@@ -167,5 +168,19 @@ check "unban" "" "$(api DELETE "/security/bans?ip=$PEER_IP/32")"
 check "ban gone from the configuration" 0 "$(grep -c "voipd-bans" "$VOIPD_GENERATED_DIR/pjsip_voipd.conf" || true)"
 reregister phone10
 wait_for "phone 10 registers again after the unban" 20 phone_registered phone10
+
+log "maximum call duration"
+api PUT /extensions/2 "$EXT11,\"transport\":\"udp\",\"srtp\":false}" >/dev/null
+wait_for "phone 11 registered" 40 phone_up office
+api PUT /retention '{"max_call_minutes":1,"calls_days":730,"audit_days":365,"sip_events_days":30,"webhook_days":30,"voicemail_heard_days":0}' >/dev/null
+peer "database put test phone11 answer:1" >/dev/null
+peer "database put test talk 300" >/dev/null
+before=$(sql "SELECT count(*) FROM calls WHERE ended_at IS NOT NULL")
+peer "channel originate Local/11@phone-out application Wait 300" >/dev/null
+wait_for "call ended by the limit" 90 calls_done $((before + 1))
+check "limit recorded on the call" 1 "$(sql "SELECT count(*) FROM call_events WHERE type = 'max_duration' AND call_id = (SELECT id FROM calls ORDER BY started_at DESC LIMIT 1)")"
+talk=$(sql "SELECT (ended_at - answered_at) / 1000 FROM calls ORDER BY started_at DESC LIMIT 1")
+check "ended after about a minute" 1 "$([ "$talk" -ge 58 ] && [ "$talk" -le 65 ] && echo 1 || echo "0 (${talk}s)")"
+peer "channel request hangup all" >/dev/null
 
 summary

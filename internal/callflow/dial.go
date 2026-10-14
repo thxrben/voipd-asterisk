@@ -165,6 +165,17 @@ func (c *call) talk(b *leg) {
 	q.media()
 	ticker := time.NewTicker(c.d.QualityEvery)
 	defer ticker.Stop()
+	// A forgotten call (a phone off the hook, a stuck line) must not run
+	// up the bill or block the line forever.
+	var limit <-chan time.Time
+	var maxDur time.Duration
+	if c.d.MaxDuration != nil {
+		if maxDur = c.d.MaxDuration(); maxDur > 0 {
+			t := time.NewTimer(maxDur)
+			defer t.Stop()
+			limit = t.C
+		}
+	}
 
 	for c.a.state != legGone && b.state != legGone {
 		select {
@@ -175,6 +186,11 @@ func (c *call) talk(b *leg) {
 			c.a.state, b.state = legGone, legGone
 		case <-ticker.C:
 			q.poll()
+		case <-limit:
+			limit = nil
+			c.d.Log.Info("call reached the maximum duration", "call", c.rec.ID, "limit", maxDur)
+			c.timeline("max_duration", map[string]any{"seconds": int(maxDur.Seconds())})
+			c.hangupAll(engine.HangupNormal)
 		case ev := <-c.inbox:
 			// Take a final sample of the surviving leg when the other side
 			// asks to hang up (the hanging-up leg's stats are already reset;

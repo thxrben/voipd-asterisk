@@ -25,6 +25,7 @@ import (
 	"voipd/internal/events"
 	"voipd/internal/modules"
 	"voipd/internal/numbers"
+	"voipd/internal/retention"
 	"voipd/internal/screening"
 	"voipd/internal/security"
 	"voipd/internal/stats"
@@ -87,8 +88,10 @@ type Deps struct {
 	Certs   *certs.Manager
 	OwnCert bool
 	// SetTLS hands new certificate files to the SIP configuration.
-	SetTLS         func(cert, key string)
-	LDAPS          *directory.LDAP
+	SetTLS func(cert, key string)
+	LDAPS  *directory.LDAP
+	// Retention holds the call limit and history retention; optional.
+	Retention      *retention.Service
 	Log            *slog.Logger
 	UI             fs.FS // built web UI (index.html + assets); nil = none
 	DataDir        string
@@ -229,6 +232,12 @@ func New(d Deps) http.Handler {
 					r.Put("/security/tls", s.saveTLSNames)
 					r.Post("/security/tls/renew", s.renewCert)
 				}
+			}
+
+			if d.Retention != nil {
+				r.Get("/retention", s.retentionInfo)
+				r.Put("/retention", s.saveRetention)
+				r.Post("/retention/prune", s.pruneNow)
 			}
 
 			r.Get("/modules", s.listModules)

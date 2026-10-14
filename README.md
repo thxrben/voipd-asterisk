@@ -28,7 +28,8 @@ phones / FritzBox ──SIP──▶ Asterisk (PJSIP) ◀──SIP──▶ carr
 | Voicemail: German prompts, message waiting light, *98 phone menu, web player, personal greetings | done |
 | Phone directory: LDAP (Yealink, Snom, Grandstream, Gigaset) and CardDAV (softphones, FritzBox) | done |
 | Backups: encrypted full backups (scheduled, rotated), restore, configuration as YAML with import preview, call history CSV/JSON | done |
-| Hardening | in progress |
+| Hardening: phone ACL, bans after failed logins, own CA for SIP-TLS/SRTP and LDAPS, call limit, retention, IPv4/IPv6 line failover | done |
+| arm64 build | in progress |
 
 ## Run
 
@@ -209,6 +210,16 @@ Under *System → Security*:
   hand, and are reported by e-mail (admins), MQTT and webhooks
   (`security.banned`).
 
+## Call limit and history
+
+Under *System → Calls & history*: answered calls end after a maximum
+duration (default 4 hours, 0 = no limit), so a phone left off the hook does
+not keep the line busy. Once a day voipd removes history older than the
+retention settings: calls with their quality data (default 730 days), the
+audit log (365), line and security events (30), webhook delivery logs (30)
+and, if set, voicemail messages some days after they were heard (default:
+kept).
+
 ## TLS and SRTP for phones
 
 voipd runs its own certificate authority. On first start it creates the CA
@@ -290,7 +301,12 @@ Asterisk's registration retries are configured never to give up (also after
    registration module → engine restart, only when no calls are active;
 3. forces re-registration immediately when local addresses, the IPv6
    prefix, the public IP or the registrar's DNS targets (NAPTR/SRV/A,
-   including a change of server preference) change.
+   including a change of server preference) change;
+4. moves a line with address family *auto* from IPv4 to IPv6 (or back)
+   when re-registering does not help and this host has an address of the
+   other family. A working line stays where it is; it switches again only
+   when that family fails too, at most every 15 minutes
+   (`trunk.family_changed`; the status page shows the family in use).
 
 Running calls are never disturbed: re-registering waits while a call is up
 on that trunk (de-registering can tear down calls, e.g. at Telekom), module
@@ -320,7 +336,8 @@ test/e2e/voicemail.sh   # leave a message, message waiting light, *98 listen and
 test/e2e/backup.sh      # backups with rotation, config export/edit/import reaching Asterisk, encrypted
                         # export restoring a deleted phone, full restore through a restart (~1 min)
 test/e2e/security.sh    # phone over TLS verifying voipd's CA, SRTP call; phone ACL (refused outside
-                        # allowed networks, line unaffected); ban after wrong passwords, unban (~2 min)
+                        # allowed networks, line unaffected); ban after wrong passwords, unban;
+                        # call ended at the maximum duration (~3 min)
 test/e2e/directory.sh   # voipd image with the compose security settings: LDAP on 389 as the phones
                         # search, LDAPS on 636 verified against voipd's CA, unprivileged
                         # afterwards, CardDAV (~3 min with image build)

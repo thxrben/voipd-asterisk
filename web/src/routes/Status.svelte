@@ -41,6 +41,8 @@
     'trunk.reconnecting': 'Reconnecting',
     'engine.up': 'Asterisk connected',
     'engine.down': 'Asterisk connection lost',
+    'trunk.family_changed': 'Line switched address family',
+    'security.banned': 'SIP sender banned',
   }
   function eventTone(t: string): string {
     if (t.endsWith('.up')) return 'good'
@@ -53,6 +55,7 @@
     if (d['action']) p.push(`${d['action'] as string}${d['attempt'] ? ` #${d['attempt'] as number}` : ''}`)
     if (d['reason'] && d['reason'] !== 'escalation') p.push(String(d['reason']))
     if (d['detail']) p.push(String(d['detail']))
+    if (d['from'] && d['to']) p.push(`IP${d['from'] as string} → IP${d['to'] as string}`)
     if (d['down_seconds'] != null) p.push(`was down ${duration(Number(d['down_seconds']))}`)
     if (d['error']) p.push(String(d['error']))
     return p.join(' · ')
@@ -113,6 +116,7 @@
                 <span class="dot {t.up ? 'good' : 'bad'}"></span>
                 <span class="mono">{phone(t.number)}</span>
                 <span class="muted">{t.trunk}</span>
+                {#if t.family}<span class="badge info" title="Address family in use">IP{t.family}</span>{/if}
                 <span class="right small {t.up ? 'muted' : 'down'}">
                   {t.up ? `up ${ago(t.since).replace(" ago", "")}` : `${t.state}${t.attempts ? `, ${t.attempts} tries` : ''}`}
                 </span>

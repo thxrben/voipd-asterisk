@@ -10,6 +10,12 @@
 //  3. reload of the outbound registration module (fresh transports, DNS)
 //  4. restart of the engine, only after RestartAfter and only when idle
 //
+// A trunk with address family "auto" starts on IPv4. When forced
+// re-registers do not bring it back and this host has an address of the
+// other family, it switches to that family (in place of the module
+// reload). It stays on a working family; it switches again only when that
+// one fails too, and at most once per RestartAfter.
+//
 // Network changes (local/public IP, DNS targets) trigger an immediate
 // re-register even for registrations that look healthy, because a stale
 // registration after an IP change looks "Registered" until it expires.
@@ -23,6 +29,8 @@ package trunks
 import (
 	"context"
 	"log/slog"
+	"net"
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
@@ -38,6 +46,7 @@ const (
 	EventReconnecting = "trunk.reconnecting"
 	EventEngineDown   = "engine.down"
 	EventEngineUp     = "engine.up"
+	EventFamily       = "trunk.family_changed" // trunk, from, to
 )
 
 // Actions is the part of the engine the supervisor drives.
@@ -86,6 +95,8 @@ type Line struct {
 	Registration string `json:"registration"` // engine registration id
 	Trunk        string `json:"trunk"`
 	Number       string `json:"number"`
+	// AutoFamily: the trunk may switch between IPv4 and IPv6.
+	AutoFamily bool `json:"-"`
 }
 
 // Status is a registration's current health, for the UI and API.
@@ -97,6 +108,8 @@ type Status struct {
 	Since     time.Time       `json:"since"` // last up/down transition
 	Attempts  int             `json:"attempts"`
 	Announced bool            `json:"announced_down"`
+	// Family is the address family in use for "auto" trunks (v4 | v6).
+	Family string `json:"family,omitempty"`
 }
 
 type regState struct {
@@ -134,11 +147,30 @@ type Supervisor struct {
 	lastRestart time.Time
 	lastKick    time.Time
 	pending     map[string]string // forced re-registers waiting to run: registration -> reason
+	family      map[string]familyState
+
+	// SwitchFamily moves an "auto" trunk to another address family (nil:
+	// no switching); HasFamily reports whether this host can use one.
+	SwitchFamily func(ctx context.Context, trunk, family string) error
+	HasFamily    func(family string) bool
+}
+
+type familyState struct {
+	current  string
+	switched time.Time
+}
+
+func other(family string) string {
+	if family == "v6" {
+		return "v4"
+	}
+	return "v6"
 }
 
 func NewSupervisor(act Actions, bus *events.Bus, record Recorder, log *slog.Logger, pol Policy, load func() Load) *Supervisor {
 	return &Supervisor{act: act, bus: bus, record: record, log: log, pol: pol,
-		load: load, regs: map[string]*regState{}, pending: map[string]string{}}
+		load: load, regs: map[string]*regState{}, pending: map[string]string{}, family: map[string]familyState{},
+		HasFamily: HostHasFamily}
 }
 
 // SetLines declares the registrations that should exist. Unknown ones are
@@ -168,8 +200,12 @@ func (s *Supervisor) Statuses() []Status {
 	defer s.mu.Unlock()
 	out := make([]Status, 0, len(s.regs))
 	for _, r := range s.regs {
-		out = append(out, Status{Line: r.Line, State: r.state, Detail: r.detail, Up: r.up,
-			Since: r.since, Attempts: r.attempts, Announced: r.announced})
+		st := Status{Line: r.Line, State: r.state, Detail: r.detail, Up: r.up,
+			Since: r.since, Attempts: r.attempts, Announced: r.announced}
+		if r.AutoFamily {
+			st.Family = s.familyLocked(r.Trunk)
+		}
+		out = append(out, st)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Trunk != out[j].Trunk {
@@ -289,9 +325,31 @@ func (s *Supervisor) Poll(ctx context.Context, now time.Time) error {
 }
 
 type action struct {
-	kind    string // reregister | reload | restart
+	kind    string // reregister | reload | restart | family
 	reg     string
 	attempt int
+	// family switches: trunk and the families
+	trunk, from, to string
+}
+
+func (s *Supervisor) familyLocked(trunk string) string {
+	if f := s.family[trunk].current; f != "" {
+		return f
+	}
+	return "v4"
+}
+
+// canSwitchLocked reports whether a down registration's trunk should move
+// to the other address family now.
+func (s *Supervisor) canSwitchLocked(r *regState, now time.Time) bool {
+	if !r.AutoFamily || s.SwitchFamily == nil || r.attempts <= s.pol.ReregisterAttempts {
+		return false
+	}
+	f := s.family[r.Trunk]
+	if !f.switched.IsZero() && now.Sub(f.switched) < s.pol.RestartAfter {
+		return false
+	}
+	return s.HasFamily == nil || s.HasFamily(other(s.familyLocked(r.Trunk)))
 }
 
 // Tick announces outages past the grace period and runs due escalation
@@ -346,6 +404,13 @@ func (s *Supervisor) Tick(ctx context.Context, now time.Time) {
 		a := action{kind: "reregister", reg: name, attempt: r.attempts}
 		idle := load.Calls == 0 // reload and restart affect every call
 		switch {
+		case s.canSwitchLocked(r, now):
+			from := s.familyLocked(r.Trunk)
+			a.kind, a.trunk, a.from, a.to = "family", r.Trunk, from, other(from)
+			s.family[r.Trunk] = familyState{current: a.to, switched: now}
+		case r.AutoFamily && now.Sub(s.family[r.Trunk].switched) < s.pol.FirstRetry:
+			// The trunk just moved to the other family (which reloads its
+			// configuration): give it time before heavier steps.
 		case r.attempts > s.pol.ReregisterAttempts && !s.reloaded && !globalDone && idle:
 			a.kind, s.reloaded, globalDone = "reload", true, true
 		// Restart only once the cheaper steps were actually tried (a long
@@ -453,6 +518,12 @@ func (s *Supervisor) run(ctx context.Context, now time.Time, a action, reason st
 	case "restart":
 		s.log.Warn("trunk down for too long, restarting engine when idle", "registration", a.reg)
 		err = s.act.RestartWhenIdle(ctx)
+	case "family":
+		s.log.Warn("trunk does not register, switching address family", "trunk", a.trunk, "from", a.from, "to", a.to)
+		err = s.SwitchFamily(ctx, a.trunk, a.to)
+		if err == nil {
+			s.emit(ctx, now, EventFamily, a.trunk, map[string]any{"trunk": a.trunk, "from": a.from, "to": a.to})
+		}
 	}
 	detail := map[string]any{"action": a.kind, "reason": reason}
 	if a.attempt > 0 {
@@ -481,4 +552,32 @@ func (s *Supervisor) emit(ctx context.Context, now time.Time, typ, subject strin
 			s.log.Error("record sip event", "err", err)
 		}
 	}
+}
+
+// HostHasFamily reports whether this host has an address to reach the
+// internet with: any IPv4 address besides loopback, or a global IPv6
+// address.
+func HostHasFamily(family string) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip, ok := netip.AddrFromSlice(n.IP)
+		if !ok || ip.Unmap().IsLoopback() {
+			continue
+		}
+		ip = ip.Unmap()
+		switch {
+		case family == "v4" && ip.Is4():
+			return true
+		case family == "v6" && ip.Is6() && ip.IsGlobalUnicast() && !ip.IsPrivate():
+			return true
+		}
+	}
+	return false
 }

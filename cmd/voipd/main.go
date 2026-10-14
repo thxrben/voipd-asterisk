@@ -37,6 +37,7 @@ import (
 	"voipd/internal/modules/webhook"
 	"voipd/internal/numbers"
 	"voipd/internal/pbx"
+	"voipd/internal/retention"
 	"voipd/internal/screening"
 	"voipd/internal/security"
 	"voipd/internal/stats"
@@ -138,14 +139,19 @@ func run() error {
 	}
 	syncer := screening.NewSyncer(st, screen, nums, bus, log.With("component", "lists"))
 	vm := voicemail.New(st, eng, bus, cfg.Store.VoicemailDir, log.With("component", "voicemail"))
+	callPolicy := retention.New(st, vm, log.With("component", "retention"))
+	if err := callPolicy.Load(ctx); err != nil {
+		return fmt.Errorf("load call policy: %w", err)
+	}
 	calls := callflow.NewManager(callflow.Deps{
-		Engine:    eng,
-		Store:     st,
-		Numbers:   nums,
-		Screener:  screen,
-		Voicemail: vm,
-		Bus:       bus,
-		Log:       log.With("component", "calls"),
+		Engine:      eng,
+		Store:       st,
+		Numbers:     nums,
+		Screener:    screen,
+		Voicemail:   vm,
+		Bus:         bus,
+		Log:         log.With("component", "calls"),
+		MaxDuration: callPolicy.MaxDuration,
 	})
 	sup := trunks.NewSupervisor(eng, bus, st.AddSIPEvent, log.With("component", "trunks"),
 		policy(cfg.Trunks), func() trunks.Load {
@@ -160,6 +166,7 @@ func run() error {
 		TLSCertFile: cfg.Network.TLSCertFile,
 		TLSKeyFile:  cfg.Network.TLSKeyFile,
 	})
+	sup.SwitchFamily = conf.SetFamily
 	certMgr := certs.New(st, cfg.Asterisk.GeneratedDir, cfg.Asterisk.EngineGeneratedDir, log.With("component", "certs"))
 	if _, err := certMgr.Ensure(ctx); err != nil {
 		return fmt.Errorf("certificates: %w", err)
@@ -209,6 +216,8 @@ func run() error {
 		log.With("component", "backup"))
 	afterImport := func(ctx context.Context) error {
 		var errs []error
+		errs = append(errs, callPolicy.Load(ctx), guard.Load(ctx))
+		conf.SetAccess(guard.ACL(), guard.Banned())
 		errs = append(errs, conf.Apply(ctx), screen.Load(ctx))
 		if srcs, err := st.ListSources(ctx); err == nil {
 			for _, src := range srcs {
@@ -239,7 +248,7 @@ func run() error {
 			Store: st, Numbers: nums, Config: conf, Auth: authSvc, Engine: eng, Calls: calls, Trunks: sup, Bus: bus,
 			Stats: statistics, Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
 			Directory: phonebook, DirectoryAccounts: dirAccounts, LDAP: ldapSrv, CardDAV: carddavSrv,
-			Backup: backups, AfterImport: afterImport, Security: guard, Certs: certMgr, OwnCert: ownCert, LDAPS: ldapsSrv,
+			Backup: backups, AfterImport: afterImport, Security: guard, Certs: certMgr, OwnCert: ownCert, LDAPS: ldapsSrv, Retention: callPolicy,
 			SetTLS: conf.SetTLS, Restart: stop, Log: log.With("component", "web"), UI: webui.FS(),
 			DataDir: filepath.Dir(cfg.Store.Path), TrustedProxies: proxies,
 		}),
@@ -260,7 +269,7 @@ func run() error {
 		}
 		httpDone <- nil
 	}()
-	wg.Add(10)
+	wg.Add(11)
 	if ldapLn != nil {
 		wg.Add(1)
 		go func() {
@@ -289,6 +298,7 @@ func run() error {
 	go func() { defer wg.Done(); cleanupLoop(ctx, authSvc) }()
 	go func() { defer wg.Done(); backups.Run(ctx) }()
 	go func() { defer wg.Done(); guard.Run(ctx) }()
+	go func() { defer wg.Done(); callPolicy.Run(ctx) }()
 	go func() { defer wg.Done(); certLoop(ctx, certMgr, conf, ownCert, log) }()
 	go func() { defer wg.Done(); superviseLoop(ctx, sup, cfg.Trunks, log) }()
 	go func() { defer wg.Done(); watchNetwork(ctx, cfg, conf, sup, log) }()

@@ -272,3 +272,71 @@ func TestPollMarksMissingRegistrationsDown(t *testing.T) {
 		}
 	}
 }
+
+func TestAddressFamilyFailover(t *testing.T) {
+	h := newHarness(t)
+	var switches []string
+	h.sup.SwitchFamily = func(_ context.Context, trunk, family string) error {
+		switches = append(switches, trunk+" "+family)
+		return nil
+	}
+	h.sup.HasFamily = func(string) bool { return true }
+	h.sup.SetLines([]Line{
+		{Registration: "trunk-telekom-1", Trunk: "telekom", Number: "+492011111111", AutoFamily: true},
+		{Registration: "trunk-telekom-2", Trunk: "telekom", Number: "+492012222222", AutoFamily: true},
+	})
+	h.observe("trunk-telekom-1", engine.RegRegistered)
+	h.observe("trunk-telekom-2", engine.RegRegistered)
+	h.expectEvents(EventUp, EventUp)
+	if st := h.sup.Statuses(); st[0].Family != "v4" {
+		t.Fatalf("family %q", st[0].Family)
+	}
+
+	// Both lines fail; re-registers do not help; then one switch to v6
+	// for the trunk (in place of the module reload).
+	h.observe("trunk-telekom-1", engine.RegRejected)
+	h.observe("trunk-telekom-2", engine.RegRejected)
+	h.advance(180 * time.Second)
+	h.expectActions("reregister trunk-telekom-1,reregister trunk-telekom-2," +
+		"reregister trunk-telekom-1,reregister trunk-telekom-2,reregister trunk-telekom-1,reregister trunk-telekom-2")
+	h.advance(180 * time.Second) // t=360
+	if len(switches) != 1 || switches[0] != "telekom v6" {
+		t.Fatalf("switches %v", switches)
+	}
+	h.expectActions("reregister trunk-telekom-2")
+	evs := h.expectEvents(EventDown, EventDown, EventReconnecting, EventReconnecting, EventReconnecting,
+		EventReconnecting, EventReconnecting, EventReconnecting, EventFamily, EventReconnecting, EventReconnecting)
+	if evs[8].Data["to"] != "v6" {
+		t.Errorf("family event %v", evs[8].Data)
+	}
+	h.observe("trunk-telekom-1", engine.RegRegistered)
+	h.observe("trunk-telekom-2", engine.RegRegistered)
+	if st := h.sup.Statuses(); st[0].Family != "v6" || !st[0].Up {
+		t.Fatalf("after switch %+v", st[0])
+	}
+
+	// v6 fails later: back to v4, but not within RestartAfter of the
+	// last switch.
+	h.expectEvents(EventUp, EventUp)
+	h.observe("trunk-telekom-1", engine.RegRejected)
+	h.advance(10 * time.Minute)
+	if len(switches) != 1 {
+		t.Fatalf("switched again too soon: %v", switches)
+	}
+	h.advance(30 * time.Minute)
+	if len(switches) != 2 || switches[1] != "telekom v4" {
+		t.Fatalf("switches %v", switches)
+	}
+}
+
+func TestNoFamilySwitchWithoutTheOtherFamily(t *testing.T) {
+	h := newHarness(t)
+	h.sup.SwitchFamily = func(context.Context, string, string) error { t.Fatal("switched"); return nil }
+	h.sup.HasFamily = func(string) bool { return false }
+	h.sup.SetLines([]Line{{Registration: "trunk-telekom-1", Trunk: "telekom", AutoFamily: true}})
+	h.observe("trunk-telekom-1", engine.RegRejected)
+	h.advance(400 * time.Second)
+	if !strings.Contains(h.act.take(), "reload") {
+		t.Error("no module reload instead")
+	}
+}

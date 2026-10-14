@@ -29,6 +29,7 @@ import (
 	"voipd/internal/modules/notify"
 	"voipd/internal/modules/webhook"
 	"voipd/internal/numbers"
+	"voipd/internal/retention"
 	"voipd/internal/screening"
 	"voipd/internal/security"
 	"voipd/internal/stats"
@@ -170,7 +171,8 @@ func newEnv(t *testing.T, mutate func(*config.Auth)) *env {
 	if _, err := certMgr.Ensure(ctx); err != nil {
 		t.Fatal(err)
 	}
-	h = New(Deps{Backup: backups, Security: guard, Certs: certMgr, OwnCert: true, SetTLS: func(string, string) {}, AfterImport: func(context.Context) error { ev.imports++; return nil },
+	callPolicy := retention.New(st, vm, log)
+	h = New(Deps{Backup: backups, Security: guard, Retention: callPolicy, Certs: certMgr, OwnCert: true, SetTLS: func(string, string) {}, AfterImport: func(context.Context) error { ev.imports++; return nil },
 		Restart: func() { ev.restarts <- struct{}{} }, Store: st, Numbers: z, Config: applied, Auth: a, Engine: fakeEngine{}, Calls: calls, Trunks: fakeTrunks{}, Bus: bus,
 		Stats: stats.New(st.DB), Screening: screen, Syncer: syncer, Modules: mods, Voicemail: vm,
 		Directory: phonebook, DirectoryAccounts: dirAcc, CardDAV: directory.NewCardDAV(phonebook, dirAcc, log),

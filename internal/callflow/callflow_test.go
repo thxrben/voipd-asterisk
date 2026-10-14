@@ -189,6 +189,7 @@ type env struct {
 	m       *Manager
 	vm      *voicemail.Service
 	vmDir   string
+	maxDur  time.Duration // call duration limit (set before the call starts)
 }
 
 // newEnv seeds: trunk "telekom" with DID +492011111111 (line id 1) routed to
@@ -218,6 +219,7 @@ func newEnv(t *testing.T, ringTimeout int, fallback string) *env {
 	sub, unsub := bus.Subscribe("call.", 64)
 
 	e := &env{eng: newFakeEngine(), st: st, bus: sub, vmDir: t.TempDir()}
+
 	e.vm = voicemail.New(st, e.eng, bus, e.vmDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	e.m = NewManager(Deps{
 		Engine: e.eng, Store: st, Numbers: z, Bus: bus, Voicemail: e.vm,
@@ -232,6 +234,7 @@ func newEnv(t *testing.T, ringTimeout int, fallback string) *env {
 			return Verdict{}
 		}),
 		QualityEvery: 20 * time.Millisecond,
+		MaxDuration:  func() time.Duration { return e.maxDur },
 	})
 	done := make(chan struct{})
 	go func() {
@@ -570,6 +573,43 @@ func TestInternalCalls(t *testing.T) {
 			t.Errorf("status = %s", c.Status)
 		}
 	})
+}
+
+func TestMaxDuration(t *testing.T) {
+	e := newEnv(t, 30, "hangup")
+	e.maxDur = 300 * time.Millisecond
+	e.fromPhone("A", "10", "11")
+	e.eng.expect(t, "originate office")
+	r := e.eng.originated(t, "office")
+	e.eng.state(r.ID, "Up")
+	e.eng.expect(t, "answer A")
+	e.eng.expect(t, "bridge create")
+	e.eng.expect(t, "bridge add br1 A,"+r.ID)
+	start := time.Now()
+	got := map[string]bool{}
+	for !got["hangup A normal"] || !got["hangup "+r.ID+" normal"] {
+		select {
+		case a := <-e.eng.actions:
+			got[a] = true
+		case <-time.After(3 * time.Second):
+			t.Fatalf("no hangup at the limit: %v", got)
+		}
+	}
+	if d := time.Since(start); d < 250*time.Millisecond {
+		t.Errorf("hung up after %v", d)
+	}
+	e.eng.hangup("A", engine.CauseNormal)
+	e.eng.hangup(r.ID, engine.CauseNormal)
+	e.events(t)
+	c := e.onlyCall(t)
+	_, evs, _ := e.st.CallDetail(context.Background(), c.ID)
+	found := false
+	for _, ev := range evs {
+		found = found || ev.Type == "max_duration"
+	}
+	if c.Status != store.CallAnswered || !found {
+		t.Errorf("call %+v, events %+v", c, evs)
+	}
 }
 
 func TestEstimateMOS(t *testing.T) {
